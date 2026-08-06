@@ -3,7 +3,7 @@
 ![Video Glitcher version](https://img.shields.io/badge/Video_Glitcher-v0.1.0-38e5df)
 ![Python version](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)
 
-Video Glitcher is a Python desktop editor for combining video clips, a separate audio track, procedural retro visuals, and smooth seeded glitch events.
+Video Glitcher is a desktop editor for combining video clips, an audio track, procedural retro visuals, and smooth seeded glitch events.
 
 ![Video Glitcher interface](screenshot.png)
 
