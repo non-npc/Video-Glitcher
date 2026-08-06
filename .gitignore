@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+*.mp4
+*.avi
+.venv/
+dist/
+build/
+

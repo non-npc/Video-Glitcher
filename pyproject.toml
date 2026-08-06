@@ -1,0 +1,16 @@
+[project]
+name = "video-glitcher"
+version = "0.1.0"
+description = "A procedural retro glitch video editor."
+requires-python = ">=3.11"
+dependencies = [
+  "numpy>=1.26",
+  "opencv-python>=4.9",
+  "Pillow>=10.0",
+]
+
+[project.scripts]
+video-glitcher = "glitcher.app:main"
+
+[tool.setuptools.packages.find]
+include = ["glitcher*"]
