@@ -7,6 +7,8 @@ Video Glitcher is a desktop editor for combining video clips, an audio track, pr
 
 ![Video Glitcher interface](screenshot.png)
 
+![Video Glitcher effects and preset interface](screenshot2.png)
+
 ## Included
 
 - Import and reorder multiple video clips.
