@@ -8,6 +8,36 @@ EffectParameters = dict[str, Any]
 
 
 EFFECT_PRESETS: dict[str, dict[str, EffectParameters]] = {
+    "VHS Tracking Failure": {
+        "Original": {"channel_scale": 1.0, "band_min": 2, "band_max": 6, "shift_scale": 0.10, "bottom_shift": 0.045},
+        "Loose Tracking": {"channel_scale": 0.7, "band_min": 3, "band_max": 8, "shift_scale": 0.065, "bottom_shift": 0.025},
+        "Tracking Storm": {"channel_scale": 1.45, "band_min": 6, "band_max": 13, "shift_scale": 0.18, "bottom_shift": 0.085},
+    },
+    "RGB Ghost": {
+        "Original": {"offset_base": 0.008, "offset_range": 0.018, "green_drift": 0.35},
+        "Soft Echo": {"offset_base": 0.003, "offset_range": 0.009, "green_drift": 0.18},
+        "Wide Separation": {"offset_base": 0.018, "offset_range": 0.040, "green_drift": 0.60},
+    },
+    "Neon Signal Collapse": {
+        "Original": {"hue_base": 18, "hue_swing": 28, "saturation": 1.75, "posterize_step": 42, "edge_strength": 0.65, "tracking_scale": 1.0},
+        "Candy Breakdown": {"hue_base": 35, "hue_swing": 42, "saturation": 2.10, "posterize_step": 32, "edge_strength": 0.48, "tracking_scale": 0.55},
+        "Total Collapse": {"hue_base": 70, "hue_swing": 65, "saturation": 2.55, "posterize_step": 58, "edge_strength": 0.90, "tracking_scale": 1.65},
+    },
+    "Static Reconstruction": {
+        "Original": {"color": False, "grain_size": 1, "source_mix": 0.06, "row_variation": 0.23, "streak_density": 1.0},
+        "Color Snow": {"color": True, "grain_size": 1, "source_mix": 0.10, "row_variation": 0.16, "streak_density": 0.65},
+        "Coarse Rebuild": {"color": False, "grain_size": 4, "source_mix": 0.18, "row_variation": 0.32, "streak_density": 1.8},
+    },
+    "Vertical Sync Roll": {
+        "Original": {"roll_scale": 1.0, "speed": 1.0, "seam_height": 5},
+        "Slow Roll": {"roll_scale": 0.72, "speed": 0.45, "seam_height": 3},
+        "Hard Flip": {"roll_scale": 1.0, "speed": 2.2, "seam_height": 11},
+    },
+    "Video Feedback": {
+        "Original": {"echoes": 5, "scale_step": 0.035, "rotation": 0.35, "echo_strength": 0.22, "normalization": 1.28},
+        "Soft Tunnel": {"echoes": 7, "scale_step": 0.022, "rotation": 0.18, "echo_strength": 0.14, "normalization": 1.20},
+        "Deep Spiral": {"echoes": 9, "scale_step": 0.052, "rotation": 0.90, "echo_strength": 0.31, "normalization": 1.42},
+    },
     "Glow": {
         "Soft Bloom": {"radius": 3.5, "strength": 0.55},
         "Neon Halo": {"radius": 8.0, "strength": 1.1},

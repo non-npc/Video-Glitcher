@@ -1,6 +1,6 @@
-# Video Glitcher v0.2.1
+# Video Glitcher v0.2.2
 
-![Video Glitcher version](https://img.shields.io/badge/Video_Glitcher-v0.2.1-38e5df)
+![Video Glitcher version](https://img.shields.io/badge/Video_Glitcher-v0.2.2-38e5df)
 ![Python version](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)
 
 Video Glitcher is a desktop editor for combining video clips, an audio track, procedural retro visuals, and smooth seeded glitch events.
@@ -17,8 +17,8 @@ Video Glitcher is a desktop editor for combining video clips, an audio track, pr
 - Hear the soundtrack during editor playback, including after pausing or seeking.
 - Set both the soundtrack's source in-point and its start position on the video timeline.
 - Add infinite procedural Neon Grid, Synth Sun, Plasma Field, and Analog Static clips.
-- Apply fourteen animated retro effects with smooth attack and recovery envelopes.
-- Choose from 45 curated presets; every event stores its preset parameters so saved projects remain visually stable as defaults evolve.
+- Apply twenty animated retro effects with smooth attack and recovery envelopes: the six original Glitcher effects plus fourteen additional processors.
+- Choose from 63 curated presets; every event stores its preset parameters so saved projects remain visually stable as defaults evolve.
 - Use six TV Reception modes, including full-frame Heavy Snow without an unintended moving wipe boundary.
 - Add individual effects at the playhead or generate an entire seeded sequence.
 - Continuously fill either the selected clip or every clip with randomized effects that stay inside clip boundaries.
@@ -32,18 +32,24 @@ Video Glitcher is a desktop editor for combining video clips, an audio track, pr
 - Show the active CPU/GPU encoder, frame progress, elapsed time, and a smoothed time-remaining estimate while exporting.
 - Export H.264 MP4 with AAC audio through FFmpeg.
 
-## What's new in v0.2.1
+## What's new in v0.2.2
 
 - Faster, single-pass streaming exports with automatic hardware-encoder selection.
 - Clear CPU/GPU export status and estimated time remaining.
 - Source-sized project canvases and export defaults.
 - Corrected full-frame TV static behavior.
-- Expanded the processing catalog to fourteen effects and 45 presets, with Rain and Snow weather overlays intentionally omitted.
+- Expanded the processing catalog from the six original effects to twenty effects and 63 presets, with Rain and Snow weather overlays intentionally omitted.
 - Added preset selection, parameter summaries, deterministic preset randomization, and per-event preset persistence.
 - Renamed Bitmap Posterize to Posterize.
 
 ## Effects and presets
 
+- **VHS Tracking Failure:** Original, Loose Tracking, Tracking Storm
+- **RGB Ghost:** Original, Soft Echo, Wide Separation
+- **Neon Signal Collapse:** Original, Candy Breakdown, Total Collapse
+- **Static Reconstruction:** Original, Color Snow, Coarse Rebuild
+- **Vertical Sync Roll:** Original, Slow Roll, Hard Flip
+- **Video Feedback:** Original, Soft Tunnel, Deep Spiral
 - **Glow:** Soft Bloom, Neon Halo, Dream Bloom
 - **Chromatic Aberration:** Subtle Fringe, Signal Split, Prism Tear
 - **Color Adjustment:** Faded Tape, Cold CRT, Acid Neon

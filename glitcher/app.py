@@ -34,7 +34,7 @@ MAGENTA = "#f04fb8"
 class GlitcherApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
-        self.title("Video Glitcher v0.2.1")
+        self.title("Video Glitcher v0.2.2")
         self.geometry("1280x820")
         self.minsize(980, 680)
         self.configure(bg=BG)

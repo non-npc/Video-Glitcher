@@ -74,17 +74,17 @@ def apply_effect(frame: np.ndarray, event: EffectEvent, absolute_time: float, fp
     elif name == "Declarative Shader":
         changed = _declarative_shader(frame, parameters, event, local, frame_index)
     elif name == "VHS Tracking Failure":
-        changed = _tracking(frame, event, local, frame_index)
+        changed = _tracking(frame, event, local, frame_index, parameters)
     elif name == "RGB Ghost":
-        changed = _rgb_ghost(frame, event, local)
+        changed = _rgb_ghost(frame, event, local, parameters)
     elif name == "Neon Signal Collapse":
-        changed = _neon_collapse(frame, event, local, frame_index)
+        changed = _neon_collapse(frame, event, local, frame_index, parameters)
     elif name == "Static Reconstruction":
-        changed = _static_rebuild(frame, event, local, frame_index)
+        changed = _static_rebuild(frame, event, local, frame_index, parameters)
     elif name == "Vertical Sync Roll":
-        changed = _vertical_roll(frame, event, local)
+        changed = _vertical_roll(frame, event, local, parameters)
     elif name == "Video Feedback":
-        changed = _feedback(frame, event, local)
+        changed = _feedback(frame, event, local, parameters)
     else:
         return frame
     return _blend(frame, changed, amount)
@@ -341,89 +341,132 @@ def _declarative_shader(frame: np.ndarray, parameters: dict, event: EffectEvent,
     return output
 
 
-def _rgb_ghost(frame: np.ndarray, event: EffectEvent, local: float) -> np.ndarray:
+def _rgb_ghost(frame: np.ndarray, event: EffectEvent, local: float, parameters: dict | None = None) -> np.ndarray:
+    parameters = parameters or {}
     height, width = frame.shape[:2]
     phase = math.sin(local * 5.2 + event.seed * 0.01)
-    offset = max(2, int(width * (0.008 + 0.018 * abs(phase))))
+    offset_base = float(parameters.get("offset_base", 0.008))
+    offset_range = float(parameters.get("offset_range", 0.018))
+    channel_scale = float(parameters.get("channel_scale", 1.0))
+    green_drift = float(parameters.get("green_drift", 0.35))
+    offset = max(2, int(width * (offset_base + offset_range * abs(phase)) * channel_scale))
     blue, green, red = cv2.split(frame)
     blue = np.roll(blue, offset, axis=1)
     red = np.roll(red, -offset, axis=1)
-    green = np.roll(green, int(offset * phase * 0.35), axis=1)
+    green = np.roll(green, int(offset * phase * green_drift), axis=1)
     return cv2.merge((blue, green, red))
 
 
-def _tracking(frame: np.ndarray, event: EffectEvent, local: float, frame_index: int) -> np.ndarray:
-    output = _rgb_ghost(frame, event, local)
+def _tracking(frame: np.ndarray, event: EffectEvent, local: float, frame_index: int, parameters: dict | None = None) -> np.ndarray:
+    parameters = parameters or {}
+    output = _rgb_ghost(frame, event, local, parameters)
     height, width = frame.shape[:2]
     rng = _rng_for(event, frame_index // 2)
-    band_count = int(rng.integers(2, 7))
+    band_min = max(1, int(parameters.get("band_min", 2)))
+    band_max = max(band_min, int(parameters.get("band_max", 6)))
+    band_count = int(rng.integers(band_min, band_max + 1))
+    shift_scale = max(0.0, float(parameters.get("shift_scale", 0.10)))
     for _ in range(band_count):
         y = int(rng.integers(0, max(1, height - 2)))
         band_height = int(rng.integers(max(2, height // 90), max(4, height // 10)))
-        shift = int(rng.integers(-max(3, width // 10), max(4, width // 10)))
+        maximum_shift = max(3, int(width * shift_scale))
+        shift = int(rng.integers(-maximum_shift, maximum_shift))
         end = min(height, y + band_height)
         output[y:end] = np.roll(output[y:end], shift, axis=1)
     switch_height = max(3, height // 26)
-    output[-switch_height:] = np.roll(output[-switch_height:], int(width * 0.045), axis=1)
+    output[-switch_height:] = np.roll(output[-switch_height:], int(width * float(parameters.get("bottom_shift", 0.045))), axis=1)
     return output
 
 
-def _neon_collapse(frame: np.ndarray, event: EffectEvent, local: float, frame_index: int) -> np.ndarray:
+def _neon_collapse(frame: np.ndarray, event: EffectEvent, local: float, frame_index: int, parameters: dict | None = None) -> np.ndarray:
+    parameters = parameters or {}
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV).astype(np.float32)
-    hsv[..., 0] = (hsv[..., 0] + 18 + 28 * math.sin(local * 2.7)) % 180
-    hsv[..., 1] = np.clip(hsv[..., 1] * 1.75 + 30, 0, 255)
-    hsv[..., 2] = np.clip((hsv[..., 2] // 42) * 42 + 20, 0, 255)
+    hue_base = float(parameters.get("hue_base", 18))
+    hue_swing = float(parameters.get("hue_swing", 28))
+    saturation = float(parameters.get("saturation", 1.75))
+    posterize_step = max(2, int(parameters.get("posterize_step", 42)))
+    hsv[..., 0] = (hsv[..., 0] + hue_base + hue_swing * math.sin(local * 2.7)) % 180
+    hsv[..., 1] = np.clip(hsv[..., 1] * saturation + 30, 0, 255)
+    hsv[..., 2] = np.clip((hsv[..., 2] // posterize_step) * posterize_step + 20, 0, 255)
     output = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
     edges = cv2.Canny(frame, 80, 150)
     edge_color = np.zeros_like(frame)
     edge_color[..., 0] = edges
     edge_color[..., 2] = np.roll(edges, 3, axis=1)
-    output = cv2.addWeighted(output, 0.82, edge_color, 0.65, 0)
-    return _tracking(output, event, local, frame_index)
+    output = cv2.addWeighted(output, 0.82, edge_color, float(parameters.get("edge_strength", 0.65)), 0)
+    tracking_scale = max(0.0, float(parameters.get("tracking_scale", 1.0)))
+    tracking_parameters = {
+        "channel_scale": tracking_scale,
+        "shift_scale": 0.10 * tracking_scale,
+        "bottom_shift": 0.045 * tracking_scale,
+    }
+    return _tracking(output, event, local, frame_index, tracking_parameters)
 
 
-def _static_rebuild(frame: np.ndarray, event: EffectEvent, local: float, frame_index: int) -> np.ndarray:
+def _static_rebuild(frame: np.ndarray, event: EffectEvent, local: float, frame_index: int, parameters: dict | None = None) -> np.ndarray:
+    parameters = parameters or {}
     height, width = frame.shape[:2]
     rng = _rng_for(event, frame_index)
     # Build a new field for every frame so the effect reads as temporal TV
     # snow.  The event envelope handles the uniform fade in and out; a moving
     # spatial mask here used to create an unintended upward wipe.
-    luminance = rng.integers(0, 256, (height, width), dtype=np.uint8)
-    noise = cv2.cvtColor(luminance, cv2.COLOR_GRAY2BGR).astype(np.float32)
-    row_gain = rng.uniform(0.72, 1.18, (height, 1, 1)).astype(np.float32)
+    grain = max(1, int(parameters.get("grain_size", 1)))
+    low_height = math.ceil(height / grain)
+    low_width = math.ceil(width / grain)
+    if parameters.get("color", False):
+        noise = rng.integers(0, 256, (low_height, low_width, 3), dtype=np.uint8)
+    else:
+        luminance = rng.integers(0, 256, (low_height, low_width), dtype=np.uint8)
+        noise = cv2.cvtColor(luminance, cv2.COLOR_GRAY2BGR)
+    if grain > 1:
+        noise = np.repeat(np.repeat(noise, grain, axis=0), grain, axis=1)[:height, :width]
+    noise = noise.astype(np.float32)
+    variation = max(0.0, float(parameters.get("row_variation", 0.23)))
+    row_gain = rng.uniform(0.95 - variation, 0.95 + variation, (height, 1, 1)).astype(np.float32)
     noise *= row_gain
 
     # A few short horizontal streaks keep the texture recognizably analog
     # without introducing a single hard boundary that travels through frame.
-    for _ in range(max(2, height // 180)):
+    streak_count = max(1, round(max(2, height // 180) * float(parameters.get("streak_density", 1.0))))
+    for _ in range(streak_count):
         y = int(rng.integers(0, height))
         streak_height = int(rng.integers(1, max(2, height // 120 + 1)))
         noise[y:min(height, y + streak_height)] *= float(rng.uniform(0.25, 1.65))
 
     noise = np.clip(noise, 0, 255).astype(np.uint8)
-    return cv2.addWeighted(noise, 0.94, frame, 0.06, 0.0)
+    source_mix = min(1.0, max(0.0, float(parameters.get("source_mix", 0.06))))
+    return cv2.addWeighted(noise, 1.0 - source_mix, frame, source_mix, 0.0)
 
 
-def _vertical_roll(frame: np.ndarray, event: EffectEvent, local: float) -> np.ndarray:
+def _vertical_roll(frame: np.ndarray, event: EffectEvent, local: float, parameters: dict | None = None) -> np.ndarray:
+    parameters = parameters or {}
     height = frame.shape[0]
-    progress = local / max(event.duration, 0.001)
-    shift = int(height * (0.5 - 0.5 * math.cos(progress * math.tau)))
+    progress = local / max(event.duration, 0.001) * float(parameters.get("speed", 1.0))
+    roll_scale = min(1.0, max(0.0, float(parameters.get("roll_scale", 1.0))))
+    shift = int(height * roll_scale * (0.5 - 0.5 * math.cos(progress * math.tau)))
     output = np.roll(frame, shift, axis=0)
     seam = shift % height
-    output[max(0, seam - 2):min(height, seam + 3)] = 8
+    seam_height = max(1, int(parameters.get("seam_height", 5)))
+    before = seam_height // 2
+    output[max(0, seam - before):min(height, seam + seam_height - before)] = 8
     return output
 
 
-def _feedback(frame: np.ndarray, event: EffectEvent, local: float) -> np.ndarray:
+def _feedback(frame: np.ndarray, event: EffectEvent, local: float, parameters: dict | None = None) -> np.ndarray:
+    parameters = parameters or {}
     height, width = frame.shape[:2]
     output = frame.astype(np.float32)
     center = (width / 2, height / 2)
-    for index in range(1, 6):
-        scale = 1.0 - index * (0.035 + 0.006 * math.sin(local * 2.0))
-        matrix = cv2.getRotationMatrix2D(center, index * 0.35 * math.sin(local), scale)
+    echoes = max(1, int(parameters.get("echoes", 5)))
+    scale_step = float(parameters.get("scale_step", 0.035))
+    rotation = float(parameters.get("rotation", 0.35))
+    echo_strength = float(parameters.get("echo_strength", 0.22))
+    for index in range(1, echoes + 1):
+        scale = max(0.05, 1.0 - index * (scale_step + 0.006 * math.sin(local * 2.0)))
+        matrix = cv2.getRotationMatrix2D(center, index * rotation * math.sin(local), scale)
         echo = cv2.warpAffine(frame, matrix, (width, height), borderMode=cv2.BORDER_REFLECT)
-        output += echo.astype(np.float32) * (0.22 / index)
-    return np.clip(output / 1.28, 0, 255).astype(np.uint8)
+        output += echo.astype(np.float32) * (echo_strength / index)
+    return np.clip(output / max(0.1, float(parameters.get("normalization", 1.28))), 0, 255).astype(np.uint8)
 
 
 def add_crt_finish(frame: np.ndarray, time_seconds: float, strength: float = 0.22) -> np.ndarray:

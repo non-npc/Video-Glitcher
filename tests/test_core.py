@@ -97,14 +97,24 @@ class AppCallbackTests(unittest.TestCase):
 
 
 class RenderTests(unittest.TestCase):
-    def test_catalog_has_fourteen_effects_without_weather_overlays(self) -> None:
-        self.assertEqual(len(EFFECT_NAMES), 14)
+    def test_catalog_keeps_six_originals_and_adds_fourteen_effects(self) -> None:
+        self.assertEqual(len(EFFECT_NAMES), 20)
+        for original in (
+            "VHS Tracking Failure",
+            "RGB Ghost",
+            "Neon Signal Collapse",
+            "Static Reconstruction",
+            "Vertical Sync Roll",
+            "Video Feedback",
+        ):
+            self.assertIn(original, EFFECT_NAMES)
+            self.assertIn("Original", EFFECT_PRESETS[original])
         self.assertIn("Posterize", EFFECT_NAMES)
         self.assertNotIn("Bitmap Posterize", EFFECT_NAMES)
         self.assertNotIn("Rain Overlay", EFFECT_NAMES)
         self.assertNotIn("Snow Overlay", EFFECT_NAMES)
         self.assertTrue(all(len(EFFECT_PRESETS[name]) >= 3 for name in EFFECT_NAMES))
-        self.assertEqual(sum(len(presets) for presets in EFFECT_PRESETS.values()), 45)
+        self.assertEqual(sum(len(presets) for presets in EFFECT_PRESETS.values()), 63)
 
     def test_export_duration_formatting(self) -> None:
         self.assertEqual(format_duration(0), "0:00")
@@ -185,7 +195,7 @@ class RenderTests(unittest.TestCase):
         self.assertTrue(np.any(np.all(output[:20] == foreground, axis=2)))
         self.assertTrue(np.any(np.all(output[-20:] == foreground, axis=2)))
 
-    def test_legacy_glitcher_effects_still_render(self) -> None:
+    def test_original_glitcher_effects_still_render(self) -> None:
         frame = render_generator("Synth Sun", 160, 90, 0.5, 1)
         legacy = (
             "VHS Tracking Failure",
