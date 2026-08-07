@@ -40,7 +40,6 @@ Video Glitcher is a desktop editor for combining video clips, an audio track, pr
 - Corrected full-frame TV static behavior.
 - Expanded the processing catalog from the six original effects to twenty effects and 63 presets, with Rain and Snow weather overlays intentionally omitted.
 - Added preset selection, parameter summaries, deterministic preset randomization, and per-event preset persistence.
-- Renamed Bitmap Posterize to Posterize.
 
 ## Effects and presets
 
