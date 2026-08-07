@@ -264,15 +264,23 @@ def _halftone(frame: np.ndarray, parameters: dict) -> np.ndarray:
     foreground = _parse_bgr(str(parameters.get("foreground", "#101018")))
     background = _parse_bgr(str(parameters.get("background", "#F4E9D8")))
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    rotation = cv2.getRotationMatrix2D((width / 2, height / 2), angle, 1.0)
-    gray = cv2.warpAffine(gray, rotation, (width, height), flags=cv2.INTER_LINEAR, borderValue=255)
+    local_luminance = cv2.blur(gray, (cell, cell)).astype(np.float32) / 255.0
+    radii = np.sqrt(np.clip(1.0 - local_luminance, 0.0, 1.0)) * cell * 0.52
+
+    # Rotate the repeating screen coordinates, not the source bitmap. Rotating
+    # a fixed-size image and rotating it back clips its corners and exposes a
+    # diagonal rectangular boundary over the original frame.
+    yy, xx = np.indices((height, width), dtype=np.float32)
+    radians = math.radians(angle)
+    screen_x = xx * math.cos(radians) + yy * math.sin(radians)
+    screen_y = -xx * math.sin(radians) + yy * math.cos(radians)
+    dot_x = (screen_x + cell / 2.0) % cell - cell / 2.0
+    dot_y = (screen_y + cell / 2.0) % cell - cell / 2.0
+    dots = dot_x * dot_x + dot_y * dot_y <= radii * radii
+
     output = np.full_like(frame, background)
-    grid_width = math.ceil(width / cell)
-    grid_height = math.ceil(height / cell)
-    darkness = 1.0 - cv2.resize(gray, (grid_width, grid_height), interpolation=cv2.INTER_AREA).astype(np.float32) / 255.0
-    output[_dot_mask(darkness, height, width, cell, 1.04)] = foreground
-    inverse = cv2.getRotationMatrix2D((width / 2, height / 2), -angle, 1.0)
-    return cv2.warpAffine(output, inverse, (width, height), flags=cv2.INTER_LINEAR, borderValue=background)
+    output[dots] = foreground
+    return output
 
 
 def _dot_mask(amounts: np.ndarray, height: int, width: int, cell: int, gain: float) -> np.ndarray:

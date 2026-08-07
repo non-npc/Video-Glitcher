@@ -34,7 +34,7 @@ MAGENTA = "#f04fb8"
 class GlitcherApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
-        self.title("Video Glitcher v0.2")
+        self.title("Video Glitcher v0.2.1")
         self.geometry("1280x820")
         self.minsize(980, 680)
         self.configure(bg=BG)
@@ -301,7 +301,14 @@ class GlitcherApp(tk.Tk):
         self._update_preset_summary()
 
     def _scroll_inspector(self, event: tk.Event) -> str | None:
-        widget = self.winfo_containing(event.x_root, event.y_root)
+        try:
+            widget = self.winfo_containing(event.x_root, event.y_root)
+        except (KeyError, tk.TclError):
+            # ttk Combobox pop-downs are native Tcl windows rather than
+            # Python-managed Tk widgets. On Python 3.14, resolving a wheel
+            # event over one can raise KeyError("popdown"). Let the native
+            # menu handle that event instead of treating it as inspector scroll.
+            return None
         while widget is not None and widget is not self.inspector_host:
             widget = widget.master
         if widget is None:

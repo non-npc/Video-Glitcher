@@ -9,6 +9,7 @@ import wave
 import cv2
 import numpy as np
 
+from glitcher.app import GlitcherApp
 from glitcher.effects import apply_effect, event_envelope
 from glitcher.effect_catalog import EFFECT_PRESETS, parameters_for_preset
 from glitcher.engine import RenderEngine
@@ -80,6 +81,19 @@ class ModelTests(unittest.TestCase):
         self.assertIn("keep-me", [event.id for event in project.effects])
         self.assertTrue(created)
         self.assertTrue(all(4.0 <= event.start and event.end <= 8.0 for event in created))
+
+
+class AppCallbackTests(unittest.TestCase):
+    def test_inspector_scroll_ignores_native_combobox_popdown(self) -> None:
+        class AppStub:
+            def winfo_containing(self, _x: int, _y: int) -> object:
+                raise KeyError("popdown")
+
+        class EventStub:
+            x_root = 10
+            y_root = 20
+
+        self.assertIsNone(GlitcherApp._scroll_inspector(AppStub(), EventStub()))
 
 
 class RenderTests(unittest.TestCase):
@@ -158,6 +172,18 @@ class RenderTests(unittest.TestCase):
                 self.assertEqual(output.shape, frame.shape, f"{effect} / {preset}")
                 self.assertEqual(output.dtype, np.uint8, f"{effect} / {preset}")
                 self.assertFalse(np.array_equal(output, frame), f"{effect} / {preset}")
+
+    def test_halftone_covers_the_full_canvas_without_rotated_frame_edges(self) -> None:
+        frame = np.full((180, 100, 3), 128, dtype=np.uint8)
+        parameters = parameters_for_preset("Halftone", "Fine Print")
+        event = EffectEvent(0, 4, "Halftone", 1.0, preset="Fine Print", parameters=parameters)
+        output = apply_effect(frame, event, 2.0, 30)
+        foreground = np.array((24, 16, 16), dtype=np.uint8)
+        background = np.array((216, 233, 244), dtype=np.uint8)
+        valid = np.all(output == foreground, axis=2) | np.all(output == background, axis=2)
+        self.assertTrue(np.all(valid))
+        self.assertTrue(np.any(np.all(output[:20] == foreground, axis=2)))
+        self.assertTrue(np.any(np.all(output[-20:] == foreground, axis=2)))
 
     def test_legacy_glitcher_effects_still_render(self) -> None:
         frame = render_generator("Synth Sun", 160, 90, 0.5, 1)

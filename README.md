@@ -1,6 +1,6 @@
-# Video Glitcher v0.2
+# Video Glitcher v0.2.1
 
-![Video Glitcher version](https://img.shields.io/badge/Video_Glitcher-v0.2.0-38e5df)
+![Video Glitcher version](https://img.shields.io/badge/Video_Glitcher-v0.2.1-38e5df)
 ![Python version](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)
 
 Video Glitcher is a desktop editor for combining video clips, an audio track, procedural retro visuals, and smooth seeded glitch events.
@@ -32,7 +32,7 @@ Video Glitcher is a desktop editor for combining video clips, an audio track, pr
 - Show the active CPU/GPU encoder, frame progress, elapsed time, and a smoothed time-remaining estimate while exporting.
 - Export H.264 MP4 with AAC audio through FFmpeg.
 
-## What's new in v0.2
+## What's new in v0.2.1
 
 - Faster, single-pass streaming exports with automatic hardware-encoder selection.
 - Clear CPU/GPU export status and estimated time remaining.
