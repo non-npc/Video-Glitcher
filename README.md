@@ -1,29 +1,63 @@
-# Video Glitcher v1
+# Video Glitcher v0.2
 
-![Video Glitcher version](https://img.shields.io/badge/Video_Glitcher-v0.1.0-38e5df)
+![Video Glitcher version](https://img.shields.io/badge/Video_Glitcher-v0.2.0-38e5df)
 ![Python version](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)
 
 Video Glitcher is a desktop editor for combining video clips, an audio track, procedural retro visuals, and smooth seeded glitch events.
 
 ![Video Glitcher interface](screenshot.png)
 
-## Included in v1
+## Included
 
 - Import and reorder multiple video clips.
 - Preserve each source's full aspect ratio by default, with optional crop-to-fill or stretch sizing.
+- Match a new project's canvas and default export dimensions to its first imported video (for example, a 640×360 source exports at 640×360 by default).
 - Confine glitches and CRT processing to the visible source rectangle, leaving letterbox and pillarbox areas untouched.
 - Use MP3, OGG, WAV, FLAC, AAC, M4A, or a video's audio stream as the soundtrack.
 - Hear the soundtrack during editor playback, including after pausing or seeking.
 - Set both the soundtrack's source in-point and its start position on the video timeline.
 - Add infinite procedural Neon Grid, Synth Sun, Plasma Field, and Analog Static clips.
-- Apply six animated retro effects with smooth attack and recovery envelopes.
+- Apply fourteen animated retro effects with smooth attack and recovery envelopes.
+- Choose from 45 curated presets; every event stores its preset parameters so saved projects remain visually stable as defaults evolve.
+- Use six TV Reception modes, including full-frame Heavy Snow without an unintended moving wipe boundary.
 - Add individual effects at the playhead or generate an entire seeded sequence.
 - Continuously fill either the selected clip or every clip with randomized effects that stay inside clip boundaries.
 - Replace or reroll individual generated events without changing their position or duration.
 - Use fixed duration or a randomized duration range, density, intensity, and meld controls.
 - Preview the actual rendering pipeline used by export.
 - Save and reopen `.glitcher.json` projects.
+- Detect working NVIDIA NVENC, Intel Quick Sync, and AMD AMF H.264 encoders at startup.
+- Choose automatic, GPU, or CPU encoding in the export dialog, with automatic CPU fallback if hardware encoding fails.
+- Stream rendered frames directly into FFmpeg instead of writing and re-encoding an intermediate video.
+- Show the active CPU/GPU encoder, frame progress, elapsed time, and a smoothed time-remaining estimate while exporting.
 - Export H.264 MP4 with AAC audio through FFmpeg.
+
+## What's new in v0.2
+
+- Faster, single-pass streaming exports with automatic hardware-encoder selection.
+- Clear CPU/GPU export status and estimated time remaining.
+- Source-sized project canvases and export defaults.
+- Corrected full-frame TV static behavior.
+- Expanded the processing catalog to fourteen effects and 45 presets, with Rain and Snow weather overlays intentionally omitted.
+- Added preset selection, parameter summaries, deterministic preset randomization, and per-event preset persistence.
+- Renamed Bitmap Posterize to Posterize.
+
+## Effects and presets
+
+- **Glow:** Soft Bloom, Neon Halo, Dream Bloom
+- **Chromatic Aberration:** Subtle Fringe, Signal Split, Prism Tear
+- **Color Adjustment:** Faded Tape, Cold CRT, Acid Neon
+- **Gaussian Blur:** Soft Focus, Analog Smear, Defocus
+- **Pixelate:** Fine Pixels, 8-Bit Blocks, Chunky Signal
+- **Scanlines:** Fine Display, Classic CRT, Heavy Raster
+- **TV Reception:** Weak Reception, Heavy Snow, Horizontal Sync, Rolling Bands, Color Interference, Signal Dropouts
+- **Row Glitch:** Light Tearing, Tracking Failure, Digital Break
+- **JPEG Glitch:** Compression Haze, Corrupted Tape, Data Collapse
+- **Posterize:** Retro Color, Limited Palette, Monochrome Terminal
+- **Sine Modulation:** Gentle Ripple, Tape Wave, Signal Melt
+- **Halftone:** Fine Print, Newspaper, Pop Art
+- **CMYK Halftone:** Fine Registration, Classic Print, Bold Misprint
+- **Declarative Shader:** CRT, VHS, Arcade Monitor
 
 ## Requirements
 
@@ -49,9 +83,9 @@ python run_glitcher.py
 4. Generate a full sequence, then preview or edit individual events.
 5. Save the project and export an MP4.
 
-## V1 boundaries
+## Current boundaries
 
 - Video clips are concatenated in the displayed order. Source sizing can fit with letterboxing/pillarboxing, crop to fill, or stretch.
 - Audio timing is controlled by an audio source in-point and a separate video-timeline start value.
-- Clip trimming, draggable events, undo/redo, and GPU shaders are planned beyond v1.
-- Rendering is CPU-based; 1080p or 60 fps exports may take longer than real time.
+- Clip trimming, partial-range export, draggable events, undo/redo, custom shader files, and GPU effect shaders are not yet implemented.
+- Generators and effects are rendered on the CPU. Supported GPUs accelerate H.264 encoding, but effect-heavy 1080p or 60 fps exports can still take longer than real time.

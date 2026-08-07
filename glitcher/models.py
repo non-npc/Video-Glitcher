@@ -7,15 +7,8 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from .effect_catalog import EFFECT_NAMES, default_preset, parameters_for_preset, preset_names
 
-EFFECT_NAMES = (
-    "VHS Tracking Failure",
-    "RGB Ghost",
-    "Neon Signal Collapse",
-    "Static Reconstruction",
-    "Vertical Sync Roll",
-    "Video Feedback",
-)
 
 GENERATOR_NAMES = (
     "Neon Grid",
@@ -55,7 +48,15 @@ class EffectEvent:
     intensity: float = 0.7
     meld: float = 0.35
     seed: int = 1
+    preset: str = ""
+    parameters: dict[str, Any] = field(default_factory=dict)
     id: str = field(default_factory=lambda: uuid4().hex)
+
+    def __post_init__(self) -> None:
+        if not self.preset:
+            self.preset = default_preset(self.effect)
+        if not self.parameters:
+            self.parameters = parameters_for_preset(self.effect, self.preset)
 
     @property
     def end(self) -> float:
@@ -63,7 +64,7 @@ class EffectEvent:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "EffectEvent":
-        allowed = {"start", "duration", "effect", "intensity", "meld", "seed", "id"}
+        allowed = {"start", "duration", "effect", "intensity", "meld", "seed", "preset", "parameters", "id"}
         return cls(**{key: value for key, value in data.items() if key in allowed})
 
 
@@ -96,7 +97,7 @@ class Project:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "version": 1,
+            "version": 2,
             "name": self.name,
             "clips": [asdict(clip) for clip in self.clips],
             "effects": [asdict(event) for event in self.effects],
@@ -158,11 +159,14 @@ class Project:
             duration = min(rng.triangular(low, high, (low + high) / 2), total - cursor)
             choices = [name for name in EFFECT_NAMES if name != previous]
             effect = rng.choice(choices)
+            preset = rng.choice(preset_names(effect))
             events.append(
                 EffectEvent(
                     start=round(cursor, 3),
                     duration=round(max(0.2, duration), 3),
                     effect=effect,
+                    preset=preset,
+                    parameters=parameters_for_preset(effect, preset),
                     intensity=intensity,
                     meld=meld,
                     seed=rng.randrange(1, 2_147_483_647),
@@ -223,10 +227,13 @@ class Project:
                 duration = min(sampled, remaining)
                 choices = [name for name in EFFECT_NAMES if name != previous]
                 effect = rng.choice(choices)
+                preset = rng.choice(preset_names(effect))
                 event = EffectEvent(
                     start=round(position, 3),
                     duration=round(max(0.001, duration), 3),
                     effect=effect,
+                    preset=preset,
+                    parameters=parameters_for_preset(effect, preset),
                     intensity=intensity,
                     meld=meld,
                     seed=rng.randrange(1, 2_147_483_647),

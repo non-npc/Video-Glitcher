@@ -25,11 +25,16 @@ def _background(width: int, height: int) -> np.ndarray:
     return frame.astype(np.uint8)
 
 
+def _vanishing_point_x(width: int) -> int:
+    """Keep the road, horizon, and Synth Sun on one exact center line."""
+    return width // 2
+
+
 def _neon_grid(width: int, height: int, time_seconds: float, seed: int) -> np.ndarray:
     frame = _background(width, height)
     horizon = int(height * 0.47)
     cv2.line(frame, (0, horizon), (width, horizon), (210, 60, 255), 2)
-    center = width // 2 + int(math.sin(time_seconds * 0.3 + seed) * width * 0.03)
+    center = _vanishing_point_x(width)
     for index in range(-16, 17):
         bottom_x = center + index * max(22, width // 14)
         cv2.line(frame, (center, horizon), (bottom_x, height), (220, 235, 30), 1)
@@ -44,12 +49,14 @@ def _neon_grid(width: int, height: int, time_seconds: float, seed: int) -> np.nd
 
 def _synth_sun(width: int, height: int, time_seconds: float, seed: int) -> np.ndarray:
     frame = _neon_grid(width, height, time_seconds, seed)
-    center = (width // 2, int(height * 0.31))
+    center = (_vanishing_point_x(width), int(height * 0.31))
     radius = max(24, int(height * 0.19))
     cv2.circle(frame, center, radius, (65, 92, 255), -1, lineType=cv2.LINE_AA)
     for y in range(center[1] - radius, center[1] + radius, max(5, height // 55)):
         if y > center[1]:
-            cv2.line(frame, (center[0] - radius, y), (center[0] + radius, y), (33, 8, 62), max(1, height // 100))
+            vertical_offset = y - center[1]
+            half_width = int(math.sqrt(max(0, radius * radius - vertical_offset * vertical_offset)))
+            cv2.line(frame, (center[0] - half_width, y), (center[0] + half_width, y), (33, 8, 62), max(1, height // 100))
     return frame
 
 
@@ -80,4 +87,3 @@ def _static(width: int, height: int, time_seconds: float, seed: int) -> np.ndarr
     frame[..., 0] = np.clip(frame[..., 0].astype(np.int16) + chroma, 0, 255).astype(np.uint8)
     frame[..., 2] = np.clip(frame[..., 2].astype(np.int16) - chroma, 0, 255).astype(np.uint8)
     return frame
-

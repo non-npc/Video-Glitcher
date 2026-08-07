@@ -13,8 +13,9 @@ from tkinter import filedialog, messagebox, ttk
 import cv2
 from PIL import Image, ImageTk
 
+from .effect_catalog import default_preset, parameters_for_preset, preset_names
 from .engine import RenderEngine
-from .exporter import ExportCancelled, VideoExporter
+from .exporter import CPU_ENCODER, EncoderSpec, ExportCancelled, VideoExporter, detect_h264_encoders
 from .media import probe_media
 from .models import Clip, EFFECT_NAMES, EffectEvent, GENERATOR_NAMES, Project, SOURCE_SIZING_MODES
 from .timeline import TimelineCanvas
@@ -33,13 +34,13 @@ MAGENTA = "#f04fb8"
 class GlitcherApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
-        self.title("Video Glitcher v1")
+        self.title("Video Glitcher v0.2")
         self.geometry("1280x820")
         self.minsize(980, 680)
         self.configure(bg=BG)
         self.project = Project()
         self.project_path: Path | None = None
-        self.engine = RenderEngine(self.project, (720, 405))
+        self.engine = RenderEngine(self.project, self._preview_render_size())
         self.position = 0.0
         self.playing = False
         self.last_tick = time.perf_counter()
@@ -50,6 +51,8 @@ class GlitcherApp(tk.Tk):
         self.export_progress_var = tk.DoubleVar(value=0.0)
         self.export_progress_text = tk.StringVar(value="Preparing export…")
         self.export_progress_percent = tk.StringVar(value="0%")
+        self.available_encoders: tuple[EncoderSpec, ...] = (CPU_ENCODER,)
+        self.encoder_probe_complete = False
         self.worker_messages: queue.Queue[tuple[str, object]] = queue.Queue()
         self._configure_style()
         self._build_ui()
@@ -57,6 +60,7 @@ class GlitcherApp(tk.Tk):
         self._refresh_all()
         self.after(15, self._tick)
         self.after(100, self._poll_worker)
+        threading.Thread(target=self._encoder_probe_worker, daemon=True).start()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _configure_style(self) -> None:
@@ -217,7 +221,16 @@ class GlitcherApp(tk.Tk):
         ttk.Label(panel, text="GLITCH SEQUENCER").pack(anchor="w")
         ttk.Label(panel, text="Effect", style="Muted.TLabel").pack(anchor="w", pady=(9, 2))
         self.effect_var = tk.StringVar(value=EFFECT_NAMES[0])
-        ttk.Combobox(panel, textvariable=self.effect_var, values=EFFECT_NAMES, state="readonly").pack(fill="x")
+        self.effect_combo = ttk.Combobox(panel, textvariable=self.effect_var, values=EFFECT_NAMES, state="readonly")
+        self.effect_combo.pack(fill="x")
+        self.effect_combo.bind("<<ComboboxSelected>>", self._effect_choice_changed)
+        ttk.Label(panel, text="Preset", style="Muted.TLabel").pack(anchor="w", pady=(9, 2))
+        self.preset_var = tk.StringVar(value=default_preset(EFFECT_NAMES[0]))
+        self.preset_combo = ttk.Combobox(panel, textvariable=self.preset_var, values=preset_names(EFFECT_NAMES[0]), state="readonly")
+        self.preset_combo.pack(fill="x")
+        self.preset_combo.bind("<<ComboboxSelected>>", self._preset_choice_changed)
+        self.preset_summary_var = tk.StringVar(value="")
+        ttk.Label(panel, textvariable=self.preset_summary_var, style="Muted.TLabel", wraplength=238).pack(anchor="w", pady=(4, 0))
         ttk.Label(panel, text="Timing mode", style="Muted.TLabel").pack(anchor="w", pady=(9, 2))
         self.timing_var = tk.StringVar(value="Random range")
         timing = ttk.Combobox(panel, textvariable=self.timing_var, values=("Fixed duration", "Random range"), state="readonly")
@@ -260,8 +273,32 @@ class GlitcherApp(tk.Tk):
         self.effect_list.pack(fill="both", expand=True)
         self.effect_list.bind("<<ListboxSelect>>", self._select_effect_event)
         ttk.Button(panel, text="Replace with chosen effect", style="Accent.TButton", command=self.replace_selected_effect).pack(fill="x", pady=(5, 3))
+        ttk.Button(panel, text="Apply chosen preset", command=self.apply_selected_preset).pack(fill="x", pady=3)
         ttk.Button(panel, text="Reroll selected effect", command=self.reroll_selected_effect).pack(fill="x", pady=3)
         ttk.Button(panel, text="Remove selected event", command=self.remove_effect).pack(fill="x", pady=(5, 0))
+        self._update_preset_summary()
+
+    def _effect_choice_changed(self, _event: tk.Event | None = None) -> None:
+        effect = self.effect_var.get()
+        presets = preset_names(effect)
+        self.preset_combo.configure(values=presets)
+        self.preset_var.set(default_preset(effect))
+        self._update_preset_summary()
+
+    def _preset_choice_changed(self, _event: tk.Event | None = None) -> None:
+        self._update_preset_summary()
+
+    def _update_preset_summary(self) -> None:
+        parameters = parameters_for_preset(self.effect_var.get(), self.preset_var.get())
+        summary = " · ".join(f"{key.replace('_', ' ')}: {value}" for key, value in parameters.items())
+        self.preset_summary_var.set(summary)
+
+    def _show_effect_preset(self, effect: str, preset: str) -> None:
+        self.effect_var.set(effect)
+        presets = preset_names(effect)
+        self.preset_combo.configure(values=presets)
+        self.preset_var.set(preset if preset in presets else default_preset(effect))
+        self._update_preset_summary()
 
     def _scroll_inspector(self, event: tk.Event) -> str | None:
         widget = self.winfo_containing(event.x_root, event.y_root)
@@ -294,7 +331,14 @@ class GlitcherApp(tk.Tk):
 
     def _rebuild_engine(self) -> None:
         self.engine.close()
-        self.engine = RenderEngine(self.project, (720, 405))
+        self.engine = RenderEngine(self.project, self._preview_render_size())
+
+    def _preview_render_size(self) -> tuple[int, int]:
+        """Fit the project canvas inside the preview while preserving its aspect ratio."""
+        width = max(1, self.project.width)
+        height = max(1, self.project.height)
+        scale = min(720 / width, 405 / height, 1.0)
+        return max(1, round(width * scale)), max(1, round(height * scale))
 
     def _change_source_sizing(self, _event: tk.Event | None = None) -> None:
         self.project.source_sizing = self.source_sizing_var.get()
@@ -314,7 +358,7 @@ class GlitcherApp(tk.Tk):
             self.clip_list.insert(tk.END, f"{marker}  {clip.name}  ·  {clip.duration:.1f}s")
         self.effect_list.delete(0, tk.END)
         for event in sorted(self.project.effects, key=lambda item: item.start):
-            self.effect_list.insert(tk.END, f"{event.start:05.1f}s  {event.effect}  ·  {event.duration:.1f}s")
+            self.effect_list.insert(tk.END, f"{event.start:05.1f}s  {event.effect} / {event.preset}  ·  {event.duration:.1f}s")
         self.timeline.set_project(self.project)
         self.position = min(self.position, max(0.0, self.project.duration))
         self._show_frame()
@@ -429,6 +473,12 @@ class GlitcherApp(tk.Tk):
             if not info["has_video"] or float(info["duration"]) <= 0:
                 messagebox.showwarning("Unsupported clip", f"Could not read video from:\n{path}")
                 continue
+            if not self.project.clips:
+                source_width = int(info["width"])
+                source_height = int(info["height"])
+                if source_width > 0 and source_height > 0:
+                    self.project.width = source_width
+                    self.project.height = source_height
             self.project.clips.append(Clip(name=Path(path).name, path=str(Path(path).resolve()), duration=float(info["duration"])))
         self._rebuild_engine()
         self._refresh_all()
@@ -517,7 +567,9 @@ class GlitcherApp(tk.Tk):
         except (tk.TclError, ValueError):
             messagebox.showerror("Invalid timing", "Enter valid numeric duration values.")
             return
-        self.project.effects.append(EffectEvent(start=self.position, duration=max(0.2, duration), effect=self.effect_var.get(), intensity=self.intensity_var.get(), meld=self.meld_var.get(), seed=self.seed_var.get()))
+        effect = self.effect_var.get()
+        preset = self.preset_var.get()
+        self.project.effects.append(EffectEvent(start=self.position, duration=max(0.2, duration), effect=effect, intensity=self.intensity_var.get(), meld=self.meld_var.get(), seed=self.seed_var.get(), preset=preset, parameters=parameters_for_preset(effect, preset)))
         self._refresh_all()
 
     def generate_sequence(self) -> None:
@@ -593,9 +645,9 @@ class GlitcherApp(tk.Tk):
         target = self._selected_effect_event()
         if target is None:
             return
-        self.effect_var.set(target.effect)
+        self._show_effect_preset(target.effect, target.preset)
         self.seek(target.start)
-        self.status_var.set(f"Selected {target.effect} at {target.start:.1f}s")
+        self.status_var.set(f"Selected {target.effect} / {target.preset} at {target.start:.1f}s")
 
     def _refresh_and_reselect_effect(self, event_id: str) -> None:
         self._refresh_all()
@@ -612,11 +664,28 @@ class GlitcherApp(tk.Tk):
             messagebox.showinfo("Select an event", "Select an event in the Events list first.")
             return
         replacement = self.effect_var.get()
+        preset = self.preset_var.get()
         previous = target.effect
         target.effect = replacement
+        target.preset = preset
+        target.parameters = parameters_for_preset(replacement, preset)
         self._refresh_and_reselect_effect(target.id)
         self._show_frame()
         self.status_var.set(f"Changed {previous} to {replacement}; timing preserved")
+
+    def apply_selected_preset(self) -> None:
+        target = self._selected_effect_event()
+        if target is None:
+            messagebox.showinfo("Select an event", "Select an event in the Events list first.")
+            return
+        if target.effect != self.effect_var.get():
+            messagebox.showinfo("Effect differs", "Use Replace with chosen effect before applying this preset.")
+            return
+        target.preset = self.preset_var.get()
+        target.parameters = parameters_for_preset(target.effect, target.preset)
+        self._refresh_and_reselect_effect(target.id)
+        self._show_frame()
+        self.status_var.set(f"Applied {target.preset} to {target.effect}")
 
     def reroll_selected_effect(self) -> None:
         target = self._selected_effect_event()
@@ -626,8 +695,10 @@ class GlitcherApp(tk.Tk):
         choices = [effect for effect in EFFECT_NAMES if effect != target.effect]
         previous = target.effect
         target.effect = random.SystemRandom().choice(choices)
+        target.preset = random.SystemRandom().choice(preset_names(target.effect))
+        target.parameters = parameters_for_preset(target.effect, target.preset)
         target.seed = random.SystemRandom().randrange(1, 2_147_483_647)
-        self.effect_var.set(target.effect)
+        self._show_effect_preset(target.effect, target.preset)
         self._refresh_and_reselect_effect(target.id)
         self._show_frame()
         self.status_var.set(f"Rerolled {previous} as {target.effect}; timing preserved")
@@ -643,6 +714,7 @@ class GlitcherApp(tk.Tk):
         self.position = 0.0
         self.seed_var.set(self.project.seed)
         self.source_sizing_var.set(self.project.source_sizing)
+        self._show_effect_preset(EFFECT_NAMES[0], default_preset(EFFECT_NAMES[0]))
         self._rebuild_engine()
         self._refresh_all()
 
@@ -692,9 +764,9 @@ class GlitcherApp(tk.Tk):
         settings = self._export_dialog()
         if settings is None:
             return
-        self.project.width, self.project.height, self.project.fps = settings
         snapshot = copy.deepcopy(self.project)
-        self.exporter = VideoExporter(snapshot)
+        snapshot.width, snapshot.height, snapshot.fps, encoder = settings
+        self.exporter = VideoExporter(snapshot, encoder=encoder)
         self.status_var.set("Starting export…")
         self._show_export_progress(Path(path).name)
         thread = threading.Thread(target=self._export_worker, args=(path,), daemon=True)
@@ -750,25 +822,35 @@ class GlitcherApp(tk.Tk):
         self.export_cancel_button.configure(state="disabled", text="Cancelling…")
         self.status_var.set("Cancelling export…")
 
-    def _export_dialog(self) -> tuple[int, int, int] | None:
+    def _export_dialog(self) -> tuple[int, int, int, str] | None:
         dialog = tk.Toplevel(self)
         dialog.title("Export settings")
         dialog.configure(bg=PANEL)
         dialog.transient(self)
         dialog.grab_set()
-        result: list[tuple[int, int, int]] = []
+        result: list[tuple[int, int, int, str]] = []
         resolution = tk.StringVar(value=f"{self.project.width}×{self.project.height}")
         fps = tk.IntVar(value=self.project.fps)
+        preferred = self.available_encoders[0]
+        auto_label = f"Auto — {preferred.label}" if self.encoder_probe_complete else "Auto — detecting hardware…"
+        encoder_labels = {auto_label: "auto"}
+        encoder_labels.update({spec.label: spec.key for spec in self.available_encoders})
+        encoder = tk.StringVar(value=auto_label)
         ttk.Label(dialog, text="Resolution", padding=(14, 12, 14, 2)).grid(row=0, column=0, sticky="w")
-        ttk.Combobox(dialog, textvariable=resolution, values=("854×480", "1280×720", "1920×1080"), state="readonly", width=18).grid(row=1, column=0, padx=14, sticky="ew")
+        current_resolution = f"{self.project.width}×{self.project.height}"
+        resolution_choices = tuple(dict.fromkeys((current_resolution, "854×480", "1280×720", "1920×1080")))
+        ttk.Combobox(dialog, textvariable=resolution, values=resolution_choices, state="readonly", width=18).grid(row=1, column=0, padx=14, sticky="ew")
         ttk.Label(dialog, text="Frames per second", padding=(14, 12, 14, 2)).grid(row=2, column=0, sticky="w")
         ttk.Combobox(dialog, textvariable=fps, values=(24, 25, 30, 60), state="readonly", width=18).grid(row=3, column=0, padx=14, sticky="ew")
+        ttk.Label(dialog, text="Video encoder", padding=(14, 12, 14, 2)).grid(row=4, column=0, sticky="w")
+        ttk.Combobox(dialog, textvariable=encoder, values=tuple(encoder_labels), state="readonly", width=28).grid(row=5, column=0, padx=14, sticky="ew")
+        ttk.Label(dialog, text="Auto uses the fastest available GPU encoder.", style="Muted.TLabel", padding=(14, 5, 14, 0)).grid(row=6, column=0, sticky="w")
         buttons = ttk.Frame(dialog, padding=14)
-        buttons.grid(row=4, column=0, sticky="ew")
+        buttons.grid(row=7, column=0, sticky="ew")
         ttk.Button(buttons, text="Cancel", command=dialog.destroy).pack(side="right")
         def accept() -> None:
             width_text, height_text = resolution.get().split("×")
-            result.append((int(width_text), int(height_text), int(fps.get())))
+            result.append((int(width_text), int(height_text), int(fps.get()), encoder_labels[encoder.get()]))
             dialog.destroy()
         ttk.Button(buttons, text="Export", style="Accent.TButton", command=accept).pack(side="right", padx=6)
         dialog.wait_window()
@@ -784,6 +866,9 @@ class GlitcherApp(tk.Tk):
         except Exception as error:
             self.worker_messages.put(("error", str(error)))
 
+    def _encoder_probe_worker(self) -> None:
+        self.worker_messages.put(("encoders", detect_h264_encoders()))
+
     def _poll_worker(self) -> None:
         try:
             while True:
@@ -794,6 +879,9 @@ class GlitcherApp(tk.Tk):
                     self.export_progress_var.set(float(amount) * 100)
                     self.export_progress_text.set(str(text))
                     self.export_progress_percent.set(f"{float(amount) * 100:.0f}%")
+                elif kind == "encoders":
+                    self.available_encoders = tuple(payload)
+                    self.encoder_probe_complete = True
                 elif kind == "done":
                     self.status_var.set(f"Export complete: {Path(str(payload)).name}")
                     self._close_export_progress()

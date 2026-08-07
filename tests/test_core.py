@@ -10,9 +10,10 @@ import cv2
 import numpy as np
 
 from glitcher.effects import apply_effect, event_envelope
+from glitcher.effect_catalog import EFFECT_PRESETS, parameters_for_preset
 from glitcher.engine import RenderEngine
-from glitcher.exporter import ExportCancelled, VideoExporter
-from glitcher.generators import render_generator
+from glitcher.exporter import CPU_ENCODER, HARDWARE_ENCODERS, ExportCancelled, VideoExporter, detect_h264_encoders, format_duration
+from glitcher.generators import _vanishing_point_x, render_generator
 from glitcher.media import probe_media
 from glitcher.models import Clip, EFFECT_NAMES, EffectEvent, Project
 
@@ -25,25 +26,30 @@ class ModelTests(unittest.TestCase):
         project.audio_source_start = 2.25
         project.audio_timeline_start = 1.5
         project.effects.append(EffectEvent(start=1, duration=2.5, effect="RGB Ghost", seed=99))
+        project.effects.append(EffectEvent(start=4, duration=1, effect="Posterize", preset="Limited Palette"))
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "test.glitcher.json"
             project.save(path)
             loaded = Project.load(path)
+            data = path.read_text(encoding="utf-8")
         self.assertEqual(loaded.name, "Test")
         self.assertEqual(loaded.clips[0].generator, "Neon Grid")
         self.assertEqual(loaded.effects[0].seed, 99)
+        self.assertEqual(loaded.effects[1].preset, "Limited Palette")
+        self.assertEqual(loaded.effects[1].parameters, parameters_for_preset("Posterize", "Limited Palette"))
         self.assertEqual(loaded.source_sizing, "Fill frame (crop)")
         self.assertEqual(loaded.audio_duration, 12.5)
         self.assertEqual(loaded.audio_source_start, 2.25)
         self.assertEqual(loaded.audio_timeline_start, 1.5)
+        self.assertIn('"version": 2', data)
 
     def test_seeded_sequence_is_reproducible(self) -> None:
         first = Project(clips=[Clip(name="Grid", duration=30, kind="generator", generator="Neon Grid")], seed=42)
         second = Project(clips=[Clip(name="Grid", duration=30, kind="generator", generator="Neon Grid")], seed=42)
         first.generate_effect_sequence(1.5, 4.0, 0.6, 0.7, 0.35)
         second.generate_effect_sequence(1.5, 4.0, 0.6, 0.7, 0.35)
-        left = [(item.start, item.duration, item.effect, item.seed) for item in first.effects]
-        right = [(item.start, item.duration, item.effect, item.seed) for item in second.effects]
+        left = [(item.start, item.duration, item.effect, item.preset, item.parameters, item.seed) for item in first.effects]
+        right = [(item.start, item.duration, item.effect, item.preset, item.parameters, item.seed) for item in second.effects]
         self.assertEqual(left, right)
         self.assertTrue(all(item.effect in EFFECT_NAMES for item in first.effects))
 
@@ -77,6 +83,23 @@ class ModelTests(unittest.TestCase):
 
 
 class RenderTests(unittest.TestCase):
+    def test_catalog_has_fourteen_effects_without_weather_overlays(self) -> None:
+        self.assertEqual(len(EFFECT_NAMES), 14)
+        self.assertIn("Posterize", EFFECT_NAMES)
+        self.assertNotIn("Bitmap Posterize", EFFECT_NAMES)
+        self.assertNotIn("Rain Overlay", EFFECT_NAMES)
+        self.assertNotIn("Snow Overlay", EFFECT_NAMES)
+        self.assertTrue(all(len(EFFECT_PRESETS[name]) >= 3 for name in EFFECT_NAMES))
+        self.assertEqual(sum(len(presets) for presets in EFFECT_PRESETS.values()), 45)
+
+    def test_export_duration_formatting(self) -> None:
+        self.assertEqual(format_duration(0), "0:00")
+        self.assertEqual(format_duration(83), "1:23")
+        self.assertEqual(format_duration(3723), "1:02:03")
+
+    def test_encoder_detection_always_includes_cpu_fallback(self) -> None:
+        self.assertEqual(detect_h264_encoders()[-1], CPU_ENCODER)
+
     def test_envelope_is_smooth_and_bounded(self) -> None:
         values = [event_envelope(index / 20 * 4, 4, 0.4) for index in range(21)]
         self.assertEqual(values[0], 0)
@@ -90,6 +113,26 @@ class RenderTests(unittest.TestCase):
         self.assertTrue(np.array_equal(first, second))
         self.assertEqual(first.shape, (90, 160, 3))
 
+    def test_synth_sun_and_road_share_the_exact_canvas_center(self) -> None:
+        for width in (160, 640, 641):
+            self.assertEqual(_vanishing_point_x(width), width // 2)
+        frame = render_generator("Synth Sun", 640, 360, 0.5, 1)
+        sun_pixels = np.all(frame == (65, 92, 255), axis=2)
+        _y, x = np.nonzero(sun_pixels)
+        self.assertTrue(x.size)
+        self.assertAlmostEqual(float(x.mean()), _vanishing_point_x(640), delta=1.0)
+
+    def test_synth_sun_stripes_are_clipped_to_the_circle(self) -> None:
+        width, height = 640, 360
+        grid = render_generator("Neon Grid", width, height, 0.5, 1)
+        sun = render_generator("Synth Sun", width, height, 0.5, 1)
+        center_x = _vanishing_point_x(width)
+        center_y = int(height * 0.31)
+        radius = max(24, int(height * 0.19))
+        yy, xx = np.ogrid[:height, :width]
+        safely_outside_sun = (xx - center_x) ** 2 + (yy - center_y) ** 2 > (radius + 2) ** 2
+        self.assertTrue(np.array_equal(sun[safely_outside_sun], grid[safely_outside_sun]))
+
     def test_every_effect_preserves_frame_contract(self) -> None:
         frame = render_generator("Synth Sun", 160, 90, 0.5, 1)
         for effect in EFFECT_NAMES:
@@ -97,6 +140,46 @@ class RenderTests(unittest.TestCase):
             output = apply_effect(frame, event, 2.0, 30)
             self.assertEqual(output.shape, frame.shape, effect)
             self.assertEqual(output.dtype, np.uint8, effect)
+
+    def test_every_effect_preset_renders_and_changes_pixels(self) -> None:
+        frame = render_generator("Synth Sun", 160, 90, 0.5, 1)
+        for effect, presets in EFFECT_PRESETS.items():
+            for preset, parameters in presets.items():
+                event = EffectEvent(
+                    start=0,
+                    duration=4,
+                    effect=effect,
+                    preset=preset,
+                    parameters=parameters,
+                    intensity=1.0,
+                    seed=17,
+                )
+                output = apply_effect(frame, event, 2.0, 30)
+                self.assertEqual(output.shape, frame.shape, f"{effect} / {preset}")
+                self.assertEqual(output.dtype, np.uint8, f"{effect} / {preset}")
+                self.assertFalse(np.array_equal(output, frame), f"{effect} / {preset}")
+
+    def test_legacy_glitcher_effects_still_render(self) -> None:
+        frame = render_generator("Synth Sun", 160, 90, 0.5, 1)
+        legacy = (
+            "VHS Tracking Failure",
+            "RGB Ghost",
+            "Neon Signal Collapse",
+            "Static Reconstruction",
+            "Vertical Sync Roll",
+            "Video Feedback",
+        )
+        for effect in legacy:
+            output = apply_effect(frame, EffectEvent(start=0, duration=4, effect=effect, intensity=0.8, seed=5), 2.0, 30)
+            self.assertEqual(output.shape, frame.shape, effect)
+
+    def test_static_reconstruction_affects_the_full_frame_without_a_wipe(self) -> None:
+        frame = np.full((120, 160, 3), 96, dtype=np.uint8)
+        event = EffectEvent(start=0, duration=4, effect="Static Reconstruction", intensity=1.0, seed=5)
+        output = apply_effect(frame, event, 2.0, 30)
+        difference = np.abs(output.astype(np.int16) - frame.astype(np.int16)).mean(axis=2)
+        self.assertGreater(float(difference[:30].mean()), 30.0)
+        self.assertGreater(float(difference[-30:].mean()), 30.0)
 
     def test_render_engine_combines_generator_and_effect(self) -> None:
         project = Project(width=160, height=90, clips=[Clip(name="Grid", duration=5, kind="generator", generator="Neon Grid")])
@@ -154,13 +237,46 @@ class RenderTests(unittest.TestCase):
             fps=10,
             clips=[Clip(name="Plasma", duration=0.5, kind="generator", generator="Plasma Field")],
         )
-        project.effects = [EffectEvent(start=0, duration=0.5, effect="RGB Ghost")]
+        project.effects = [EffectEvent(start=0, duration=0.5, effect="Chromatic Aberration", preset="Signal Split")]
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "smoke.mp4"
-            VideoExporter(project).export(output)
+            updates: list[tuple[float, str]] = []
+            VideoExporter(project, encoder="cpu").export(output, lambda amount, text: updates.append((amount, text)))
             self.assertTrue(output.exists())
             self.assertGreater(output.stat().st_size, 1000)
-            self.assertTrue(probe_media(output)["has_video"])
+            info = probe_media(output)
+            self.assertTrue(info["has_video"])
+            self.assertEqual((info["width"], info["height"]), (160, 90))
+            self.assertTrue(any("Encoding with CPU (x264)" in text for _amount, text in updates))
+            self.assertTrue(any("Estimating time remaining" in text for _amount, text in updates))
+            self.assertEqual(updates[-1][0], 1.0)
+
+    def test_streaming_command_reads_raw_frames_from_stdin(self) -> None:
+        project = Project(width=640, height=360, fps=30, clips=[Clip(name="Grid", duration=1, kind="generator")])
+        command = VideoExporter(project, encoder="cpu")._command(Path("output.mp4"), CPU_ENCODER)
+        self.assertIn("rawvideo", command)
+        self.assertIn("640x360", command)
+        self.assertIn("pipe:0", command)
+        self.assertNotIn("mp4v", command)
+
+    def test_hardware_failure_retries_with_cpu(self) -> None:
+        project = Project(width=160, height=90, fps=10, clips=[Clip(name="Grid", duration=0.1, kind="generator")])
+        exporter = VideoExporter(project)
+        attempted: list[str] = []
+
+        def fake_stream(output: Path, encoder: object, progress: object) -> None:
+            attempted.append(encoder.key)
+            if encoder.hardware:
+                raise subprocess.CalledProcessError(1, ["ffmpeg"])
+            output.write_bytes(b"cpu fallback")
+
+        exporter._selected_encoder = lambda: HARDWARE_ENCODERS[0]
+        exporter._stream_frames = fake_stream
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "fallback.mp4"
+            exporter.export(output)
+            self.assertEqual(output.read_bytes(), b"cpu fallback")
+        self.assertEqual(attempted, ["nvenc", "cpu"])
 
     def test_separate_audio_is_muxed_into_export(self) -> None:
         project = Project(
