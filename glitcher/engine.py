@@ -6,8 +6,8 @@ import cv2
 import numpy as np
 
 from .effects import add_crt_finish, apply_effect
-from .generators import render_generator
-from .models import Clip, Project
+from .generators import render_generator, render_generator_overlay
+from .models import Clip, GeneratorOverlay, Project
 
 
 class RenderEngine:
@@ -78,6 +78,30 @@ class RenderEngine:
         cv2.putText(frame, f"OFFLINE: {label}", (24, height // 2), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (190, 240, 240), 2, cv2.LINE_AA)
         return frame
 
+    @staticmethod
+    def _composite_generator_overlay(
+        base: np.ndarray,
+        layer: np.ndarray,
+        alpha: np.ndarray,
+        overlay: GeneratorOverlay,
+    ) -> np.ndarray:
+        base_float = base.astype(np.float32)
+        layer_float = layer.astype(np.float32)
+        if overlay.blend_mode == "Normal":
+            blended = layer_float
+        elif overlay.blend_mode == "Multiply":
+            blended = base_float * layer_float / 255.0
+        elif overlay.blend_mode == "Add":
+            blended = np.clip(base_float + layer_float, 0.0, 255.0)
+        else:
+            blended = 255.0 - (255.0 - base_float) * (255.0 - layer_float) / 255.0
+        amount = np.clip(alpha * overlay.opacity, 0.0, 1.0)[..., None]
+        return np.clip(
+            base_float * (1.0 - amount) + blended * amount,
+            0.0,
+            255.0,
+        ).astype(np.uint8)
+
     def render(self, time_seconds: float) -> np.ndarray:
         width, height = self.size
         clip, local_time = self.project.clip_at(max(0.0, time_seconds))
@@ -85,10 +109,33 @@ class RenderEngine:
             frame = np.zeros((height, width, 3), dtype=np.uint8)
             content_rect = (0, 0, width, height)
         elif clip.kind == "generator":
-            frame = render_generator(clip.generator or "Neon Grid", width, height, local_time, clip.seed)
+            frame = render_generator(
+                clip.generator or "Neon Grid",
+                width,
+                height,
+                local_time,
+                clip.seed,
+                clip.generator_parameters,
+            )
             content_rect = (0, 0, width, height)
         else:
             frame, content_rect = self._video_frame(clip, local_time, width, height)
+        for overlay in self.project.generator_overlays:
+            if overlay.start <= time_seconds < overlay.end:
+                layer, alpha = render_generator_overlay(
+                    overlay.generator,
+                    width,
+                    height,
+                    time_seconds - overlay.start,
+                    overlay.seed,
+                    overlay.generator_parameters,
+                )
+                frame = self._composite_generator_overlay(
+                    frame,
+                    layer,
+                    alpha,
+                    overlay,
+                )
         x, y, content_width, content_height = content_rect
         content = frame[y:y + content_height, x:x + content_width].copy()
         for event in self.project.effects:

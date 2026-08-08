@@ -16,8 +16,14 @@ from PIL import Image, ImageTk
 from .effect_catalog import default_preset, parameters_for_preset, preset_names
 from .engine import RenderEngine
 from .exporter import CPU_ENCODER, EncoderSpec, ExportCancelled, VideoExporter, detect_h264_encoders
+from .generators import (
+    GENERATOR_SETTINGS,
+    default_generator_preset,
+    generator_parameters_for_preset,
+    generator_preset_names,
+)
 from .media import probe_media
-from .models import Clip, EFFECT_NAMES, EffectEvent, GENERATOR_NAMES, Project, SOURCE_SIZING_MODES
+from .models import Clip, EFFECT_NAMES, EffectEvent, GENERATOR_NAMES, GeneratorOverlay, Project, SOURCE_SIZING_MODES
 from .timeline import TimelineCanvas
 
 
@@ -31,10 +37,39 @@ CYAN = "#38e5df"
 MAGENTA = "#f04fb8"
 
 
+def parse_timecode(value: str | float | int) -> float:
+    """Accept seconds, m:ss, h:mm:ss, and semicolon-separated equivalents."""
+    text = str(value).strip().replace(";", ":")
+    if not text:
+        raise ValueError("Duration is empty")
+    parts = text.split(":")
+    try:
+        numbers = [float(part) for part in parts]
+    except ValueError as error:
+        raise ValueError("Invalid duration") from error
+    if len(numbers) == 1:
+        seconds = numbers[0]
+    elif len(numbers) == 2:
+        minutes, seconds_part = numbers
+        if not 0 <= seconds_part < 60:
+            raise ValueError("Seconds must be below 60")
+        seconds = minutes * 60 + seconds_part
+    elif len(numbers) == 3:
+        hours, minutes, seconds_part = numbers
+        if not 0 <= minutes < 60 or not 0 <= seconds_part < 60:
+            raise ValueError("Minutes and seconds must be below 60")
+        seconds = hours * 3600 + minutes * 60 + seconds_part
+    else:
+        raise ValueError("Use seconds, m:ss, or h:mm:ss")
+    if seconds < 0:
+        raise ValueError("Duration cannot be negative")
+    return seconds
+
+
 class GlitcherApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
-        self.title("Video Glitcher v0.2.2")
+        self.title("Video Glitcher v0.2.3")
         self.geometry("1280x820")
         self.minsize(980, 680)
         self.configure(bg=BG)
@@ -104,6 +139,8 @@ class GlitcherApp(tk.Tk):
             bordercolor=[("focus", CYAN), ("active", CYAN), ("readonly", LINE)],
         )
         style.configure("TEntry", fieldbackground=PANEL_2, foreground=TEXT, insertcolor=TEXT, bordercolor=LINE)
+        style.configure("TCheckbutton", background=PANEL, foreground=TEXT)
+        style.map("TCheckbutton", background=[("active", PANEL)], foreground=[("active", TEXT)])
         style.configure("TScale", background=PANEL)
         style.configure("Horizontal.TProgressbar", background=CYAN, troughcolor=PANEL_2)
         style.configure("Vertical.TScrollbar", background="#253137", troughcolor=PANEL_2, bordercolor=LINE, arrowcolor=TEXT)
@@ -136,9 +173,46 @@ class GlitcherApp(tk.Tk):
         ttk.Button(bar, text="Export MP4", style="Accent.TButton", command=self.export_video).grid(row=0, column=6, padx=(8, 0))
 
     def _build_library(self) -> None:
-        panel = ttk.Frame(self, padding=12)
-        panel.grid(row=1, column=0, sticky="nsew")
-        panel.configure(width=230)
+        host = ttk.Frame(self)
+        self.library_host = host
+        host.grid(row=1, column=0, sticky="nsew")
+        host.grid_rowconfigure(0, weight=1)
+        host.grid_columnconfigure(0, weight=1)
+        self.library_canvas = tk.Canvas(
+            host,
+            width=208,
+            bg=PANEL,
+            highlightthickness=0,
+            borderwidth=0,
+        )
+        self.library_canvas.grid(row=0, column=0, sticky="nsew")
+        scrollbar = ttk.Scrollbar(
+            host,
+            orient="vertical",
+            command=self.library_canvas.yview,
+        )
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        self.library_canvas.configure(yscrollcommand=scrollbar.set)
+        panel = ttk.Frame(self.library_canvas, padding=12)
+        library_window = self.library_canvas.create_window(
+            (0, 0),
+            window=panel,
+            anchor="nw",
+        )
+        panel.bind(
+            "<Configure>",
+            lambda _event: self.library_canvas.configure(
+                scrollregion=self.library_canvas.bbox("all")
+            ),
+        )
+        self.library_canvas.bind(
+            "<Configure>",
+            lambda event: self.library_canvas.itemconfigure(
+                library_window,
+                width=event.width,
+            ),
+        )
+        self.bind_all("<MouseWheel>", self._scroll_library, add="+")
         ttk.Label(panel, text="SOURCES").pack(anchor="w", pady=(0, 7))
         ttk.Button(panel, text="Import video clips", style="Accent.TButton", command=self.import_video).pack(fill="x", pady=3)
         ttk.Button(panel, text="Choose audio source", command=self.import_audio).pack(fill="x", pady=3)
@@ -160,8 +234,8 @@ class GlitcherApp(tk.Tk):
         sizing.pack(fill="x", pady=(3, 10))
         sizing.bind("<<ComboboxSelected>>", self._change_source_sizing)
         ttk.Label(panel, text="CLIP ORDER", style="Muted.TLabel").pack(anchor="w")
-        self.clip_list = tk.Listbox(panel, height=10, bg=PANEL_2, fg=TEXT, selectbackground="#1c5f63", selectforeground=TEXT, borderwidth=1, relief="solid", highlightthickness=0, activestyle="none", exportselection=False)
-        self.clip_list.pack(fill="both", expand=True, pady=(5, 4))
+        self.clip_list = tk.Listbox(panel, height=6, bg=PANEL_2, fg=TEXT, selectbackground="#1c5f63", selectforeground=TEXT, borderwidth=1, relief="solid", highlightthickness=0, activestyle="none", exportselection=False)
+        self.clip_list.pack(fill="x", pady=(5, 4))
         clip_actions = ttk.Frame(panel)
         clip_actions.pack(fill="x")
         ttk.Button(clip_actions, text="↑", width=3, command=lambda: self.move_clip(-1)).pack(side="left", padx=(0, 3))
@@ -170,13 +244,96 @@ class GlitcherApp(tk.Tk):
         ttk.Separator(panel).pack(fill="x", pady=12)
         ttk.Label(panel, text="PROCEDURAL GENERATOR").pack(anchor="w")
         self.generator_var = tk.StringVar(value=GENERATOR_NAMES[0])
-        ttk.Combobox(panel, textvariable=self.generator_var, values=GENERATOR_NAMES, state="readonly").pack(fill="x", pady=5)
+        self.generator_combo = ttk.Combobox(
+            panel,
+            textvariable=self.generator_var,
+            values=GENERATOR_NAMES,
+            state="readonly",
+        )
+        self.generator_combo.pack(fill="x", pady=(5, 3))
+        self.generator_combo.bind(
+            "<<ComboboxSelected>>",
+            self._generator_choice_changed,
+        )
+        ttk.Label(panel, text="Preset", style="Muted.TLabel").pack(anchor="w")
+        initial_preset = default_generator_preset(GENERATOR_NAMES[0])
+        self.generator_preset_var = tk.StringVar(value=initial_preset)
+        self.generator_preset_combo = ttk.Combobox(
+            panel,
+            textvariable=self.generator_preset_var,
+            values=generator_preset_names(GENERATOR_NAMES[0]),
+            state="readonly",
+        )
+        self.generator_preset_combo.pack(fill="x", pady=(3, 3))
+        self.generator_preset_combo.bind(
+            "<<ComboboxSelected>>",
+            self._generator_preset_changed,
+        )
+        self.generator_parameters = generator_parameters_for_preset(
+            GENERATOR_NAMES[0],
+            initial_preset,
+        )
+        self.generator_summary_var = tk.StringVar(value="")
+        ttk.Label(
+            panel,
+            textvariable=self.generator_summary_var,
+            style="Muted.TLabel",
+            wraplength=184,
+        ).pack(anchor="w", pady=(2, 3))
+        ttk.Button(
+            panel,
+            text="Generator settings...",
+            command=self._edit_generator_settings,
+        ).pack(fill="x", pady=(0, 5))
         gen_row = ttk.Frame(panel)
         gen_row.pack(fill="x")
-        ttk.Label(gen_row, text="Duration", style="Muted.TLabel").pack(side="left")
-        self.generator_duration_var = tk.DoubleVar(value=8.0)
+        ttk.Label(gen_row, text="Duration (m:ss)", style="Muted.TLabel").pack(side="left")
+        self.generator_duration_var = tk.StringVar(value="0:08")
         ttk.Entry(gen_row, textvariable=self.generator_duration_var, width=7).pack(side="right")
-        ttk.Button(panel, text="Add generator clip", command=self.add_generator).pack(fill="x", pady=(5, 0))
+        self.generator_overlay_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            panel,
+            text="Add as overlay",
+            variable=self.generator_overlay_var,
+            command=self._sync_generator_overlay_controls,
+        ).pack(anchor="w", pady=(7, 3))
+        overlay_options = ttk.Frame(panel)
+        overlay_options.pack(fill="x")
+        ttk.Label(overlay_options, text="Blend", style="Muted.TLabel").grid(row=0, column=0, sticky="w")
+        self.generator_blend_var = tk.StringVar(value="Screen")
+        self.generator_blend_combo = ttk.Combobox(
+            overlay_options,
+            textvariable=self.generator_blend_var,
+            values=("Normal", "Screen", "Add", "Multiply"),
+            state="disabled",
+            width=10,
+        )
+        self.generator_blend_combo.grid(row=0, column=1, sticky="e")
+        ttk.Label(overlay_options, text="Opacity", style="Muted.TLabel").grid(row=1, column=0, sticky="w", pady=(3, 0))
+        self.generator_opacity_var = tk.DoubleVar(value=0.85)
+        self.generator_opacity_entry = ttk.Entry(
+            overlay_options,
+            textvariable=self.generator_opacity_var,
+            width=7,
+            state="disabled",
+        )
+        self.generator_opacity_entry.grid(row=1, column=1, sticky="e", pady=(3, 0))
+        overlay_options.grid_columnconfigure(1, weight=1)
+        self.add_generator_button = ttk.Button(
+            panel,
+            text="Add generator clip",
+            command=self.add_generator,
+        )
+        self.add_generator_button.pack(fill="x", pady=(5, 0))
+        ttk.Label(panel, text="GENERATOR OVERLAYS", style="Muted.TLabel").pack(anchor="w", pady=(12, 3))
+        self.overlay_list = tk.Listbox(panel, height=4, bg=PANEL_2, fg=TEXT, selectbackground="#1c5f63", selectforeground=TEXT, borderwidth=1, relief="solid", highlightthickness=0, activestyle="none", exportselection=False)
+        self.overlay_list.pack(fill="x")
+        ttk.Button(
+            panel,
+            text="Remove selected overlay",
+            command=self.remove_generator_overlay,
+        ).pack(fill="x", pady=(4, 0))
+        self._update_generator_summary()
 
     def _build_preview(self) -> None:
         center = ttk.Frame(self, style="Dark.TFrame", padding=14)
@@ -317,6 +474,19 @@ class GlitcherApp(tk.Tk):
         self.inspector_canvas.yview_scroll(direction * 3, "units")
         return "break"
 
+    def _scroll_library(self, event: tk.Event) -> str | None:
+        try:
+            widget = self.winfo_containing(event.x_root, event.y_root)
+        except (KeyError, tk.TclError):
+            return None
+        while widget is not None and widget is not self.library_host:
+            widget = widget.master
+        if widget is None:
+            return None
+        direction = -1 if event.delta > 0 else 1
+        self.library_canvas.yview_scroll(direction * 3, "units")
+        return "break"
+
     def _scale_field(self, parent: ttk.Frame, label: str, variable: tk.DoubleVar) -> ttk.Frame:
         frame = ttk.Frame(parent)
         frame.pack(fill="x", pady=(9, 0))
@@ -353,6 +523,153 @@ class GlitcherApp(tk.Tk):
         self._show_frame()
         self.status_var.set(f"Source sizing: {self.project.source_sizing}")
 
+    def _generator_choice_changed(self, _event: tk.Event | None = None) -> None:
+        generator = self.generator_var.get()
+        presets = generator_preset_names(generator)
+        preset = default_generator_preset(generator)
+        self.generator_preset_combo.configure(values=presets)
+        self.generator_preset_var.set(preset)
+        self.generator_parameters = generator_parameters_for_preset(
+            generator,
+            preset,
+        )
+        self._update_generator_summary()
+
+    def _generator_preset_changed(self, _event: tk.Event | None = None) -> None:
+        self.generator_parameters = generator_parameters_for_preset(
+            self.generator_var.get(),
+            self.generator_preset_var.get(),
+        )
+        self._update_generator_summary()
+
+    def _update_generator_summary(self) -> None:
+        parameters = self.generator_parameters
+        preferred = (
+            "terrain_style",
+            "shape",
+            "path",
+            "copies",
+            "speed",
+            "travel_speed",
+            "size",
+        )
+        items = [
+            f"{key.replace('_', ' ')}: {parameters[key]}"
+            for key in preferred
+            if key in parameters
+        ]
+        self.generator_summary_var.set(" · ".join(items[:4]))
+
+    def _edit_generator_settings(self) -> None:
+        generator = self.generator_var.get()
+        definitions = GENERATOR_SETTINGS.get(generator, ())
+        dialog = tk.Toplevel(self)
+        dialog.title(f"{generator} settings")
+        dialog.geometry("430x580")
+        dialog.minsize(360, 360)
+        dialog.configure(bg=PANEL)
+        dialog.transient(self)
+        dialog.grab_set()
+
+        host = ttk.Frame(dialog)
+        host.pack(fill="both", expand=True)
+        canvas = tk.Canvas(
+            host,
+            bg=PANEL,
+            highlightthickness=0,
+            borderwidth=0,
+        )
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar = ttk.Scrollbar(host, orient="vertical", command=canvas.yview)
+        scrollbar.pack(side="right", fill="y")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        form = ttk.Frame(canvas, padding=14)
+        window = canvas.create_window((0, 0), window=form, anchor="nw")
+        form.bind(
+            "<Configure>",
+            lambda _event: canvas.configure(scrollregion=canvas.bbox("all")),
+        )
+        canvas.bind(
+            "<Configure>",
+            lambda event: canvas.itemconfigure(window, width=event.width),
+        )
+
+        widgets: dict[str, tuple[tk.Variable, str]] = {}
+        for row, definition in enumerate(definitions):
+            identifier = definition["id"]
+            control_type = definition["type"]
+            value = self.generator_parameters.get(identifier)
+            ttk.Label(form, text=definition["name"], style="Muted.TLabel").grid(
+                row=row,
+                column=0,
+                sticky="w",
+                padx=(0, 10),
+                pady=4,
+            )
+            if control_type == "boolean":
+                variable: tk.Variable = tk.BooleanVar(value=bool(value))
+                widget = ttk.Checkbutton(form, variable=variable)
+            elif control_type == "choice":
+                variable = tk.StringVar(value=str(value or definition["choices"][0]))
+                widget = ttk.Combobox(
+                    form,
+                    textvariable=variable,
+                    values=definition["choices"],
+                    state="readonly",
+                )
+            else:
+                variable = tk.StringVar(value=str(value if value is not None else 0))
+                widget = ttk.Entry(form, textvariable=variable)
+            widget.grid(row=row, column=1, sticky="ew", pady=4)
+            widgets[identifier] = (variable, control_type)
+        form.grid_columnconfigure(1, weight=1)
+
+        buttons = ttk.Frame(dialog, padding=(12, 8))
+        buttons.pack(fill="x")
+
+        def apply_settings() -> None:
+            updated = dict(self.generator_parameters)
+            try:
+                for identifier, (variable, control_type) in widgets.items():
+                    value = variable.get()
+                    if control_type == "integer":
+                        value = int(str(value))
+                    elif control_type == "float":
+                        value = float(str(value))
+                    elif control_type == "boolean":
+                        value = bool(value)
+                    updated[identifier] = value
+            except ValueError:
+                messagebox.showerror(
+                    "Invalid generator setting",
+                    "Enter valid numeric values for generator settings.",
+                    parent=dialog,
+                )
+                return
+            self.generator_parameters = updated
+            self._update_generator_summary()
+            dialog.destroy()
+
+        ttk.Button(buttons, text="Cancel", command=dialog.destroy).pack(side="right")
+        ttk.Button(
+            buttons,
+            text="Apply settings",
+            style="Accent.TButton",
+            command=apply_settings,
+        ).pack(side="right", padx=(0, 6))
+
+    def _sync_generator_overlay_controls(self) -> None:
+        enabled = self.generator_overlay_var.get()
+        self.generator_blend_combo.configure(
+            state="readonly" if enabled else "disabled"
+        )
+        self.generator_opacity_entry.configure(
+            state="normal" if enabled else "disabled"
+        )
+        self.add_generator_button.configure(
+            text="Add generator overlay" if enabled else "Add generator clip"
+        )
+
     def _refresh_all(self) -> None:
         self.project_name_var.set(self.project.name)
         self.source_sizing_var.set(self.project.source_sizing)
@@ -362,7 +679,26 @@ class GlitcherApp(tk.Tk):
         self.clip_list.delete(0, tk.END)
         for clip in self.project.clips:
             marker = "GEN" if clip.kind == "generator" else "VID"
-            self.clip_list.insert(tk.END, f"{marker}  {clip.name}  ·  {clip.duration:.1f}s")
+            preset = (
+                f" / {clip.generator_preset}"
+                if clip.kind == "generator" and clip.generator_preset
+                else ""
+            )
+            self.clip_list.insert(
+                tk.END,
+                f"{marker}  {clip.name}{preset}  ·  {clip.duration:.1f}s",
+            )
+        self.overlay_list.delete(0, tk.END)
+        self._displayed_overlays = sorted(
+            self.project.generator_overlays,
+            key=lambda item: item.start,
+        )
+        for overlay in self._displayed_overlays:
+            preset = f" / {overlay.generator_preset}" if overlay.generator_preset else ""
+            self.overlay_list.insert(
+                tk.END,
+                f"{overlay.start:05.1f}s  {overlay.generator}{preset}  ·  {overlay.duration:.1f}s",
+            )
         self.effect_list.delete(0, tk.END)
         for event in sorted(self.project.effects, key=lambda item: item.start):
             self.effect_list.insert(tk.END, f"{event.start:05.1f}s  {event.effect} / {event.preset}  ·  {event.duration:.1f}s")
@@ -528,13 +864,81 @@ class GlitcherApp(tk.Tk):
 
     def add_generator(self) -> None:
         try:
-            duration = max(0.5, float(self.generator_duration_var.get()))
+            duration = max(0.5, parse_timecode(self.generator_duration_var.get()))
         except (tk.TclError, ValueError):
-            messagebox.showerror("Invalid duration", "Generator duration must be a number.")
+            messagebox.showerror(
+                "Invalid duration",
+                "Use seconds, m:ss, or h:mm:ss (for example 4:32).",
+            )
             return
         name = self.generator_var.get()
-        self.project.clips.append(Clip(name=name, duration=duration, kind="generator", generator=name, seed=self.seed_var.get()))
+        preset = self.generator_preset_var.get()
+        parameters = copy.deepcopy(self.generator_parameters)
+        if self.generator_overlay_var.get():
+            if self.project.duration <= 0:
+                messagebox.showinfo(
+                    "No base footage",
+                    "Import a video or add a standalone generator clip first.",
+                )
+                return
+            try:
+                opacity = min(
+                    1.0,
+                    max(0.0, float(self.generator_opacity_var.get())),
+                )
+            except (tk.TclError, ValueError):
+                messagebox.showerror(
+                    "Invalid opacity",
+                    "Overlay opacity must be a number from 0 to 1.",
+                )
+                return
+            frame_duration = 1.0 / max(1, self.project.fps)
+            start = min(
+                self.position,
+                max(0.0, self.project.duration - frame_duration),
+            )
+            duration = min(
+                duration,
+                max(frame_duration, self.project.duration - start),
+            )
+            self.project.generator_overlays.append(
+                GeneratorOverlay(
+                    start=start,
+                    duration=duration,
+                    generator=name,
+                    generator_preset=preset,
+                    generator_parameters=parameters,
+                    opacity=opacity,
+                    blend_mode=self.generator_blend_var.get(),
+                    seed=self.seed_var.get(),
+                )
+            )
+            self.status_var.set(f"Added {name} as a generator overlay")
+        else:
+            self.project.clips.append(
+                Clip(
+                    name=name,
+                    duration=duration,
+                    kind="generator",
+                    generator=name,
+                    generator_preset=preset,
+                    generator_parameters=parameters,
+                    seed=self.seed_var.get(),
+                )
+            )
         self._rebuild_engine()
+        self._refresh_all()
+
+    def remove_generator_overlay(self) -> None:
+        selection = self.overlay_list.curselection()
+        if not selection:
+            return
+        target = self._displayed_overlays[selection[0]]
+        self.project.generator_overlays = [
+            overlay
+            for overlay in self.project.generator_overlays
+            if overlay.id != target.id
+        ]
         self._refresh_all()
 
     def move_clip(self, direction: int) -> None:
@@ -555,6 +959,11 @@ class GlitcherApp(tk.Tk):
             return
         self.project.clips.pop(selection[0])
         self.project.effects = [event for event in self.project.effects if event.start < self.project.duration]
+        self.project.generator_overlays = [
+            overlay
+            for overlay in self.project.generator_overlays
+            if overlay.start < self.project.duration
+        ]
         self._rebuild_engine()
         self._refresh_all()
 

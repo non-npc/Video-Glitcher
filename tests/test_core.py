@@ -9,25 +9,58 @@ import wave
 import cv2
 import numpy as np
 
-from glitcher.app import GlitcherApp
+from glitcher.app import GlitcherApp, parse_timecode
 from glitcher.effects import apply_effect, event_envelope
 from glitcher.effect_catalog import EFFECT_PRESETS, parameters_for_preset
 from glitcher.engine import RenderEngine
 from glitcher.exporter import CPU_ENCODER, HARDWARE_ENCODERS, ExportCancelled, VideoExporter, detect_h264_encoders, format_duration
-from glitcher.generators import _vanishing_point_x, render_generator
+from glitcher.generators import (
+    GENERATOR_NAMES,
+    GEOMETRIC_GENERATOR_NAMES,
+    RETROWAVE_DRIVE_PRESETS,
+    _vanishing_point_x,
+    generator_parameters_for_preset,
+    generator_preset_names,
+    render_generator,
+    render_generator_overlay,
+)
 from glitcher.media import probe_media
-from glitcher.models import Clip, EFFECT_NAMES, EffectEvent, Project
+from glitcher.models import Clip, EFFECT_NAMES, EffectEvent, GeneratorOverlay, Project
 
 
 class ModelTests(unittest.TestCase):
     def test_project_round_trip(self) -> None:
-        project = Project(name="Test", clips=[Clip(name="Grid", duration=5, kind="generator", generator="Neon Grid")])
+        project = Project(
+            name="Test",
+            clips=[
+                Clip(
+                    name="Grid",
+                    duration=5,
+                    kind="generator",
+                    generator="Neon Grid",
+                    generator_preset="Cyan Highway",
+                    generator_parameters=generator_parameters_for_preset("Neon Grid", "Cyan Highway"),
+                )
+            ],
+        )
         project.source_sizing = "Fill frame (crop)"
         project.audio_duration = 12.5
         project.audio_source_start = 2.25
         project.audio_timeline_start = 1.5
         project.effects.append(EffectEvent(start=1, duration=2.5, effect="RGB Ghost", seed=99))
         project.effects.append(EffectEvent(start=4, duration=1, effect="Posterize", preset="Limited Palette"))
+        project.generator_overlays.append(
+            GeneratorOverlay(
+                start=0.5,
+                duration=3.0,
+                generator="Neon Grid",
+                generator_preset="Magenta Night",
+                generator_parameters=generator_parameters_for_preset("Neon Grid", "Magenta Night"),
+                opacity=0.6,
+                blend_mode="Add",
+                seed=44,
+            )
+        )
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "test.glitcher.json"
             project.save(path)
@@ -35,14 +68,31 @@ class ModelTests(unittest.TestCase):
             data = path.read_text(encoding="utf-8")
         self.assertEqual(loaded.name, "Test")
         self.assertEqual(loaded.clips[0].generator, "Neon Grid")
+        self.assertEqual(loaded.clips[0].generator_preset, "Cyan Highway")
+        self.assertEqual(loaded.clips[0].generator_parameters["grid_color"], "#20E3FF")
         self.assertEqual(loaded.effects[0].seed, 99)
         self.assertEqual(loaded.effects[1].preset, "Limited Palette")
         self.assertEqual(loaded.effects[1].parameters, parameters_for_preset("Posterize", "Limited Palette"))
+        self.assertEqual(loaded.generator_overlays[0].generator, "Neon Grid")
+        self.assertEqual(loaded.generator_overlays[0].generator_preset, "Magenta Night")
+        self.assertEqual(loaded.generator_overlays[0].generator_parameters["grid_color"], "#FF3CAC")
+        self.assertEqual(loaded.generator_overlays[0].blend_mode, "Add")
+        self.assertEqual(loaded.generator_overlays[0].opacity, 0.6)
         self.assertEqual(loaded.source_sizing, "Fill frame (crop)")
         self.assertEqual(loaded.audio_duration, 12.5)
         self.assertEqual(loaded.audio_source_start, 2.25)
         self.assertEqual(loaded.audio_timeline_start, 1.5)
-        self.assertIn('"version": 2', data)
+        self.assertIn('"version": 3', data)
+
+    def test_older_project_without_generator_overlays_still_loads(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "legacy.glitcher.json"
+            path.write_text(
+                '{"version": 2, "name": "Legacy", "clips": []}',
+                encoding="utf-8",
+            )
+            loaded = Project.load(path)
+        self.assertEqual(loaded.generator_overlays, [])
 
     def test_seeded_sequence_is_reproducible(self) -> None:
         first = Project(clips=[Clip(name="Grid", duration=30, kind="generator", generator="Neon Grid")], seed=42)
@@ -84,6 +134,14 @@ class ModelTests(unittest.TestCase):
 
 
 class AppCallbackTests(unittest.TestCase):
+    def test_generator_duration_accepts_timeline_timecodes(self) -> None:
+        self.assertEqual(parse_timecode("4:32"), 272.0)
+        self.assertEqual(parse_timecode("4;32"), 272.0)
+        self.assertEqual(parse_timecode("1:02:03"), 3723.0)
+        self.assertEqual(parse_timecode("8.5"), 8.5)
+        with self.assertRaises(ValueError):
+            parse_timecode("4:72")
+
     def test_inspector_scroll_ignores_native_combobox_popdown(self) -> None:
         class AppStub:
             def winfo_containing(self, _x: int, _y: int) -> object:
@@ -95,10 +153,21 @@ class AppCallbackTests(unittest.TestCase):
 
         self.assertIsNone(GlitcherApp._scroll_inspector(AppStub(), EventStub()))
 
+    def test_library_scroll_ignores_native_combobox_popdown(self) -> None:
+        class AppStub:
+            def winfo_containing(self, _x, _y):
+                raise KeyError("popdown")
+
+        class EventStub:
+            x_root = 10
+            y_root = 20
+
+        self.assertIsNone(GlitcherApp._scroll_library(AppStub(), EventStub()))
+
 
 class RenderTests(unittest.TestCase):
-    def test_catalog_keeps_six_originals_and_adds_fourteen_effects(self) -> None:
-        self.assertEqual(len(EFFECT_NAMES), 20)
+    def test_catalog_keeps_six_originals_and_adds_fifteen_effects(self) -> None:
+        self.assertEqual(len(EFFECT_NAMES), 21)
         for original in (
             "VHS Tracking Failure",
             "RGB Ghost",
@@ -114,7 +183,7 @@ class RenderTests(unittest.TestCase):
         self.assertNotIn("Rain Overlay", EFFECT_NAMES)
         self.assertNotIn("Snow Overlay", EFFECT_NAMES)
         self.assertTrue(all(len(EFFECT_PRESETS[name]) >= 3 for name in EFFECT_NAMES))
-        self.assertEqual(sum(len(presets) for presets in EFFECT_PRESETS.values()), 63)
+        self.assertEqual(sum(len(presets) for presets in EFFECT_PRESETS.values()), 71)
 
     def test_export_duration_formatting(self) -> None:
         self.assertEqual(format_duration(0), "0:00")
@@ -136,6 +205,54 @@ class RenderTests(unittest.TestCase):
         second = render_generator("Plasma Field", 160, 90, 1.25, 123)
         self.assertTrue(np.array_equal(first, second))
         self.assertEqual(first.shape, (90, 160, 3))
+
+    def test_geometric_video_generators_render_and_animate(self) -> None:
+        self.assertEqual(len(GEOMETRIC_GENERATOR_NAMES), 8)
+        for name in GEOMETRIC_GENERATOR_NAMES:
+            with self.subTest(generator=name):
+                first = render_generator(name, 160, 90, 0.5, 123)
+                duplicate = render_generator(name, 160, 90, 0.5, 123)
+                later = render_generator(name, 160, 90, 1.5, 123)
+                self.assertTrue(np.array_equal(first, duplicate))
+                self.assertEqual(first.shape, (90, 160, 3))
+                self.assertEqual(first.dtype, np.uint8)
+                self.assertGreater(int(first.max()), 20)
+                if name != "Static Concentric Signal":
+                    self.assertFalse(np.array_equal(first, later))
+
+    def test_every_generator_can_render_as_an_overlay(self) -> None:
+        names = GENERATOR_NAMES + GEOMETRIC_GENERATOR_NAMES
+        for name in names:
+            with self.subTest(generator=name):
+                layer, alpha = render_generator_overlay(name, 160, 90, 0.1, 9)
+                self.assertEqual(layer.shape, (90, 160, 3))
+                self.assertEqual(alpha.shape, (90, 160))
+                self.assertEqual(layer.dtype, np.uint8)
+                self.assertGreaterEqual(float(alpha.min()), 0.0)
+                self.assertLessEqual(float(alpha.max()), 1.0)
+                self.assertGreater(float(alpha.max()), 0.0)
+
+    def test_every_generator_exposes_renderable_presets(self) -> None:
+        for generator in GENERATOR_NAMES:
+            presets = generator_preset_names(generator)
+            self.assertGreaterEqual(len(presets), 3, generator)
+            for preset in presets:
+                with self.subTest(generator=generator, preset=preset):
+                    parameters = generator_parameters_for_preset(generator, preset)
+                    frame = render_generator(generator, 160, 90, 0.4, 19, parameters)
+                    self.assertEqual(frame.shape, (90, 160, 3))
+                    self.assertEqual(frame.dtype, np.uint8)
+
+    def test_retrowave_drive_has_all_seven_presets_and_animates(self) -> None:
+        self.assertEqual(len(RETROWAVE_DRIVE_PRESETS), 7)
+        for preset in RETROWAVE_DRIVE_PRESETS:
+            with self.subTest(preset=preset):
+                parameters = generator_parameters_for_preset("Retrowave Drive", preset)
+                first = render_generator("Retrowave Drive", 160, 90, 0.25, 7, parameters)
+                duplicate = render_generator("Retrowave Drive", 160, 90, 0.25, 7, parameters)
+                later = render_generator("Retrowave Drive", 160, 90, 1.25, 7, parameters)
+                self.assertTrue(np.array_equal(first, duplicate))
+                self.assertFalse(np.array_equal(first, later))
 
     def test_synth_sun_and_road_share_the_exact_canvas_center(self) -> None:
         for width in (160, 640, 641):
@@ -226,6 +343,40 @@ class RenderTests(unittest.TestCase):
         finally:
             engine.close()
         self.assertEqual(frame.shape, (90, 160, 3))
+
+    def test_render_engine_superimposes_generator_overlay(self) -> None:
+        project = Project(
+            width=160,
+            height=90,
+            clips=[
+                Clip(
+                    name="Grid",
+                    duration=5,
+                    kind="generator",
+                    generator="Neon Grid",
+                )
+            ],
+        )
+        plain_engine = RenderEngine(project)
+        try:
+            plain = plain_engine.render(2.0)
+        finally:
+            plain_engine.close()
+        project.generator_overlays.append(
+            GeneratorOverlay(
+                start=0,
+                duration=5,
+                generator="Triangle Orbit",
+                opacity=0.9,
+                blend_mode="Screen",
+            )
+        )
+        overlay_engine = RenderEngine(project)
+        try:
+            composited = overlay_engine.render(2.0)
+        finally:
+            overlay_engine.close()
+        self.assertFalse(np.array_equal(plain, composited))
 
     def test_fit_entire_frame_preserves_full_portrait_image(self) -> None:
         source = np.full((200, 100, 3), 255, dtype=np.uint8)

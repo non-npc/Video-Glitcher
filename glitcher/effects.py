@@ -6,6 +6,7 @@ import cv2
 import numpy as np
 
 from .effect_catalog import parameters_for_preset
+from .generators import geometric_trail_layer
 from .models import EffectEvent
 
 
@@ -73,6 +74,8 @@ def apply_effect(frame: np.ndarray, event: EffectEvent, absolute_time: float, fp
         changed = _cmyk_halftone(frame, parameters)
     elif name == "Declarative Shader":
         changed = _declarative_shader(frame, parameters, event, local, frame_index)
+    elif name == "Geometric Trails":
+        changed = _geometric_trails(frame, parameters, local)
     elif name == "VHS Tracking Failure":
         changed = _tracking(frame, event, local, frame_index, parameters)
     elif name == "RGB Ghost":
@@ -88,6 +91,20 @@ def apply_effect(frame: np.ndarray, event: EffectEvent, absolute_time: float, fp
     else:
         return frame
     return _blend(frame, changed, amount)
+
+
+def _geometric_trails(
+    frame: np.ndarray,
+    parameters: dict,
+    local: float,
+) -> np.ndarray:
+    height, width = frame.shape[:2]
+    overlay, alpha = geometric_trail_layer(width, height, local, parameters)
+    source = frame.astype(np.float32)
+    layer = overlay.astype(np.float32)
+    screened = 255.0 - (255.0 - source) * (255.0 - layer) / 255.0
+    amount = alpha[..., None]
+    return np.clip(source * (1.0 - amount) + screened * amount, 0, 255).astype(np.uint8)
 
 
 def _glow(frame: np.ndarray, parameters: dict, local: float) -> np.ndarray:

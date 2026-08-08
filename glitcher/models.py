@@ -8,14 +8,8 @@ from typing import Any
 from uuid import uuid4
 
 from .effect_catalog import EFFECT_NAMES, default_preset, parameters_for_preset, preset_names
+from .generators import GENERATOR_NAMES
 
-
-GENERATOR_NAMES = (
-    "Neon Grid",
-    "Synth Sun",
-    "Plasma Field",
-    "Analog Static",
-)
 
 SOURCE_SIZING_MODES = (
     "Fit entire frame",
@@ -31,12 +25,49 @@ class Clip:
     kind: str = "video"
     path: str | None = None
     generator: str | None = None
+    generator_preset: str = ""
+    generator_parameters: dict[str, Any] = field(default_factory=dict)
     seed: int = 1
     id: str = field(default_factory=lambda: uuid4().hex)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Clip":
-        allowed = {"name", "duration", "kind", "path", "generator", "seed", "id"}
+        allowed = {
+            "name", "duration", "kind", "path", "generator",
+            "generator_preset", "generator_parameters", "seed", "id",
+        }
+        return cls(**{key: value for key, value in data.items() if key in allowed})
+
+
+@dataclass(slots=True)
+class GeneratorOverlay:
+    start: float
+    duration: float
+    generator: str
+    generator_preset: str = ""
+    generator_parameters: dict[str, Any] = field(default_factory=dict)
+    opacity: float = 0.85
+    blend_mode: str = "Screen"
+    seed: int = 1
+    id: str = field(default_factory=lambda: uuid4().hex)
+
+    @property
+    def end(self) -> float:
+        return self.start + self.duration
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "GeneratorOverlay":
+        allowed = {
+            "start",
+            "duration",
+            "generator",
+            "generator_preset",
+            "generator_parameters",
+            "opacity",
+            "blend_mode",
+            "seed",
+            "id",
+        }
         return cls(**{key: value for key, value in data.items() if key in allowed})
 
 
@@ -72,6 +103,7 @@ class EffectEvent:
 class Project:
     name: str = "Untitled Signal"
     clips: list[Clip] = field(default_factory=list)
+    generator_overlays: list[GeneratorOverlay] = field(default_factory=list)
     effects: list[EffectEvent] = field(default_factory=list)
     audio_path: str | None = None
     audio_duration: float = 0.0
@@ -97,9 +129,12 @@ class Project:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "version": 2,
+            "version": 3,
             "name": self.name,
             "clips": [asdict(clip) for clip in self.clips],
+            "generator_overlays": [
+                asdict(overlay) for overlay in self.generator_overlays
+            ],
             "effects": [asdict(event) for event in self.effects],
             "audio_path": self.audio_path,
             "audio_duration": self.audio_duration,
@@ -121,6 +156,10 @@ class Project:
         return cls(
             name=data.get("name", "Untitled Signal"),
             clips=[Clip.from_dict(item) for item in data.get("clips", [])],
+            generator_overlays=[
+                GeneratorOverlay.from_dict(item)
+                for item in data.get("generator_overlays", [])
+            ],
             effects=[EffectEvent.from_dict(item) for item in data.get("effects", [])],
             audio_path=data.get("audio_path"),
             audio_duration=float(data.get("audio_duration", 0.0)),

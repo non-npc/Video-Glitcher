@@ -3,6 +3,8 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
+from .generators import GEOMETRIC_TRAIL_PRESETS
+
 
 EffectParameters = dict[str, Any]
 
@@ -111,6 +113,7 @@ EFFECT_PRESETS: dict[str, dict[str, EffectParameters]] = {
         "VHS": {"recipe": "VHS", "channel_offset": 4, "noise": 10.0, "scanline_spacing": 4, "scanline_darkness": 0.18, "levels": 32},
         "Arcade Monitor": {"recipe": "Arcade Monitor", "channel_offset": 1, "scanline_spacing": 3, "scanline_darkness": 0.42, "vignette": 0.30, "glow": 0.45},
     },
+    "Geometric Trails": GEOMETRIC_TRAIL_PRESETS,
 }
 
 

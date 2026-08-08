@@ -10,7 +10,7 @@ class TimelineCanvas(tk.Canvas):
     TRACK_LABEL_WIDTH = 70
 
     def __init__(self, master: tk.Misc, seek_callback: Callable[[float], None]) -> None:
-        super().__init__(master, height=170, highlightthickness=0, cursor="hand2")
+        super().__init__(master, height=215, highlightthickness=0, cursor="hand2")
         self.project = Project()
         self.position = 0.0
         self.seek_callback = seek_callback
@@ -48,19 +48,20 @@ class TimelineCanvas(tk.Canvas):
         lime = "#aade4e"
         amber = "#eaa64a"
         self.configure(background=bg)
-        self.create_rectangle(0, 0, width, 170, fill=bg, outline="")
-        for y in (27, 72, 117, 162):
+        self.create_rectangle(0, 0, width, 215, fill=bg, outline="")
+        for y in (27, 72, 117, 162, 207):
             self.create_line(0, y, width, y, fill=line)
         self.create_text(8, 49, text="VIDEO", anchor="w", fill=text, font=("Segoe UI", 9))
-        self.create_text(8, 94, text="GLITCH", anchor="w", fill=text, font=("Segoe UI", 9))
-        self.create_text(8, 139, text="AUDIO", anchor="w", fill=text, font=("Segoe UI", 9))
+        self.create_text(8, 94, text="OVERLAY", anchor="w", fill=text, font=("Segoe UI", 9))
+        self.create_text(8, 139, text="GLITCH", anchor="w", fill=text, font=("Segoe UI", 9))
+        self.create_text(8, 184, text="AUDIO", anchor="w", fill=text, font=("Segoe UI", 9))
         if self.project.duration <= 0:
-            self.create_text(self.TRACK_LABEL_WIDTH + 12, 84, text="Import a clip or add a generator to begin", anchor="w", fill=text)
+            self.create_text(self.TRACK_LABEL_WIDTH + 12, 107, text="Import a clip or add a generator to begin", anchor="w", fill=text)
             return
         for index in range(7):
             seconds = self.project.duration * index / 6
             x = self._time_to_x(seconds)
-            self.create_line(x, 20, x, 162, fill=line)
+            self.create_line(x, 20, x, 207, fill=line)
             self.create_text(x + 3, 11, text=self._format_time(seconds), anchor="w", fill=text, font=("Consolas", 8))
         cursor = 0.0
         for index, clip in enumerate(self.project.clips):
@@ -70,12 +71,18 @@ class TimelineCanvas(tk.Canvas):
             self.create_rectangle(x1, 34, x2, 65, fill=color, outline="")
             self.create_text(x1 + 5, 49, text=clip.name, anchor="w", fill="#071113", width=max(1, int(x2 - x1 - 8)), font=("Segoe UI", 9))
             cursor += clip.duration
+        for index, overlay in enumerate(self.project.generator_overlays):
+            x1 = self._time_to_x(overlay.start) + 1
+            x2 = self._time_to_x(min(self.project.duration, overlay.end)) - 1
+            color = magenta if index % 2 == 0 else cyan
+            self.create_rectangle(x1, 79, x2, 110, fill=color, outline="")
+            self.create_text(x1 + 4, 94, text=overlay.generator, anchor="w", fill="#111018", width=max(1, int(x2 - x1 - 6)), font=("Segoe UI", 8))
         for index, effect in enumerate(self.project.effects):
             x1 = self._time_to_x(effect.start) + 1
             x2 = self._time_to_x(min(self.project.duration, effect.end)) - 1
             color = lime if index % 2 == 0 else amber
-            self.create_rectangle(x1, 79, x2, 110, fill=color, outline="")
-            self.create_text(x1 + 4, 94, text=effect.effect, anchor="w", fill="#11160b", width=max(1, int(x2 - x1 - 6)), font=("Segoe UI", 8))
+            self.create_rectangle(x1, 124, x2, 155, fill=color, outline="")
+            self.create_text(x1 + 4, 139, text=effect.effect, anchor="w", fill="#11160b", width=max(1, int(x2 - x1 - 6)), font=("Segoe UI", 8))
         if self.project.audio_path:
             audio_start = max(0.0, self.project.audio_timeline_start)
             available = max(0.0, self.project.audio_duration - self.project.audio_source_start)
@@ -83,12 +90,12 @@ class TimelineCanvas(tk.Canvas):
             if visible_duration > 0:
                 x1 = self._time_to_x(audio_start) + 1
                 x2 = self._time_to_x(min(self.project.duration, audio_start + visible_duration)) - 1
-                self.create_rectangle(x1, 124, x2, 155, fill="#a63d82", outline="")
+                self.create_rectangle(x1, 169, x2, 200, fill="#a63d82", outline="")
                 name = self.project.audio_path.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
                 label = f"{name} · in {self.project.audio_source_start:.1f}s"
-                self.create_text(x1 + 5, 139, text=label, anchor="w", fill="#ffffff", width=max(1, int(x2 - x1 - 8)), font=("Segoe UI", 9))
+                self.create_text(x1 + 5, 184, text=label, anchor="w", fill="#ffffff", width=max(1, int(x2 - x1 - 8)), font=("Segoe UI", 9))
         x = self._time_to_x(min(self.position, self.project.duration))
-        self.create_line(x, 20, x, 163, fill="#ffffff", width=2)
+        self.create_line(x, 20, x, 208, fill="#ffffff", width=2)
         self.create_polygon(x - 5, 20, x + 5, 20, x, 27, fill="#ffffff", outline="")
 
     @staticmethod
